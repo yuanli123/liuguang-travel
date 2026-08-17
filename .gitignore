@@ -9,6 +9,8 @@ desktop.ini
 *.swp
 *.swo
 
-# Node (备用)
+# Node
 node_modules/
-package-lock.json
+
+# 环境变量（含数据库密码，禁止提交）
+.env
