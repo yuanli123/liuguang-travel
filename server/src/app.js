@@ -23,6 +23,20 @@ app.use(
   })
 );
 
+// 根路径：接口导航（浏览器直接访问时不再困惑）
+app.get("/", (req, res) => {
+  res.json({
+    name: "流光幻旅 API",
+    message: "后端服务运行中，请访问以下接口：",
+    endpoints: [
+      "GET /api/health            健康检查",
+      "GET /api/stories           已上架故事列表（可加 ?city=北京 过滤）",
+      "GET /api/stories/:id       故事详情（如 /api/stories/kunming）",
+      "GET /api/cities            城市及故事数量",
+    ],
+  });
+});
+
 // 路由挂载
 app.use("/api/health", require("./routes/health"));
 app.use("/api/stories", require("./routes/stories"));
