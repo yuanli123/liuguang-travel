@@ -17,11 +17,31 @@ const BASE_COLUMNS = `
       WHERE sp.story_id = s.id ORDER BY sp.sort LIMIT 1) AS spot,
     (SELECT t.name FROM story_topics st
        JOIN topics t ON t.id = st.topic_id
-      WHERE st.story_id = s.id ORDER BY st.topic_id LIMIT 1) AS category
+      WHERE st.story_id = s.id ORDER BY st.topic_id LIMIT 1) AS category,
+    (SELECT p.lat FROM story_points sp
+       JOIN points p ON p.id = sp.point_id
+      WHERE sp.story_id = s.id ORDER BY sp.sort LIMIT 1) AS lat,
+    (SELECT p.lng FROM story_points sp
+       JOIN points p ON p.id = sp.point_id
+      WHERE sp.story_id = s.id ORDER BY sp.sort LIMIT 1) AS lng
 `;
 
 const BASE_FROM = "FROM stories s";
 const PUBLISHED = "s.status = 2 AND s.deleted_at IS NULL";
+
+/** mysql2 通常已把 JSON 列解析成数组；个别配置下返回字符串，防御性再解析 */
+function safeEmotionTags(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string") {
+    try {
+      const parsed = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
 
 /** GET /api/stories?city=北京 —— 已上架故事列表 */
 router.get("/", async (req, res) => {
@@ -37,7 +57,13 @@ router.get("/", async (req, res) => {
     `SELECT ${BASE_COLUMNS} ${BASE_FROM} ${where} ORDER BY s.id ASC`,
     params
   );
-  res.json({ stories: rows, total: rows.length });
+  const stories = rows.map((r) => ({
+    ...r,
+    emotionTags: safeEmotionTags(r.emotionTags),
+    lat: r.lat == null ? null : Number(r.lat),
+    lng: r.lng == null ? null : Number(r.lng),
+  }));
+  res.json({ stories, total: stories.length });
 });
 
 /** GET /api/stories/:id —— 详情（slug 或数字 ID），含正文/信源/点位坐标 */
@@ -55,6 +81,7 @@ router.get("/:id", async (req, res) => {
     return res.status(404).json({ error: "故事不存在或已下架" });
   }
   const story = rows[0];
+  story.emotionTags = safeEmotionTags(story.emotionTags);
 
   // 关联点位（mysql2 对 DECIMAL 返回字符串，需转 Number）
   const [points] = await pool.query(

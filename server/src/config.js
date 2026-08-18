@@ -13,6 +13,8 @@ module.exports = {
     database: process.env.DB_NAME || "liuguang_travel",
   },
   port: Number(process.env.PORT || 3000),
+  jwtSecret: process.env.JWT_SECRET || "liuguang-dev-secret-change-me",
+  nodeEnv: process.env.NODE_ENV || "development",
   corsOrigins: (process.env.CORS_ORIGIN || "http://localhost:8123,http://127.0.0.1:8123")
     .split(",")
     .map((s) => s.trim())

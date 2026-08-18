@@ -97,11 +97,17 @@ curl http://localhost:3000/api/cities
 | 接口 | 说明 |
 |---|---|
 | `GET /api/health` | 服务与数据库健康检查 |
-| `GET /api/stories` | 已上架故事列表，可选 `?city=` 过滤 |
+| `GET /api/stories` | 已上架故事列表（含经纬度），可选 `?city=` 过滤 |
 | `GET /api/stories/:id` | 故事详情（slug 或数字 ID），含正文/信源/点位 |
 | `GET /api/cities` | 城市及故事数量（按数量降序） |
+| `POST /api/auth/sms/send` | 发送登录验证码（开发期不接真实短信，验证码随响应 `devCode` 返回，60 秒限频） |
+| `POST /api/auth/sms/verify` | 校验验证码并登录/注册，返回 JWT（30 天有效） |
+| `GET /api/me` | 当前登录用户（需 `Authorization: Bearer <token>`） |
+| `POST /api/sync` | 收藏/进度/完播/历史/行程云端合并同步（需登录） |
 
 错误统一返回中文 JSON：`{"error":"..."}`；未知接口返回 404 `{"error":"接口不存在"}`。
+
+> **开发期登录说明**：短信发送接口会返回 `devCode`（并在服务端控制台打印），前端 App 会把验证码显示在 toast 里，输入即可登录。接入真实短信服务后（阶段二 B1），`devCode` 在生产环境（`NODE_ENV=production`）自动不下发。
 
 ## 故事数据更新
 

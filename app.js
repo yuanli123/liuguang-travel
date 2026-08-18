@@ -25,7 +25,7 @@ const CITIES = ["全部", "北京", "上海", "杭州", "苏州", "成都", "西
 /* ================================================================
    故事数据（lat/lng 为真实景区坐标）
    ================================================================ */
-const STORIES = [
+const BUILTIN_STORIES = [
   {
     id: "kunming",
     title: "昆明湖的呼吸",
@@ -269,6 +269,9 @@ const STORIES = [
   },
 ];
 
+// 运行时数据源：默认用内置数据（离线演示模式），loadStories() 成功后替换为 API 数据
+let STORIES = BUILTIN_STORIES;
+
 /* ================================================================
    城市行前预览
    ================================================================ */
@@ -347,6 +350,9 @@ const defaultState = {
   userLat: null,
   userLng: null,
   locationGranted: false,
+  token: null, // 云端登录令牌（JWT）
+  favRemoved: [], // 已取消收藏待同步的 slug（防止云合并后复活）
+  syncedAt: null, // 最近一次云端同步时间
 };
 
 function loadState() {
@@ -380,6 +386,193 @@ function saveState() {
 }
 
 const state = loadState();
+
+/* ================================================================
+   后端 API 接入（离线时自动回退到内置数据）
+   ================================================================ */
+const API_BASE = "http://localhost:3000";
+let apiOnline = false; // 最近一次请求成功即 true；失败即 false
+const scriptCache = {}; // slug -> { script, source }（详情正文缓存）
+
+async function api(path, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (opts.body) headers["Content-Type"] = "application/json";
+  if (state.token) headers["Authorization"] = "Bearer " + state.token;
+  let res;
+  try {
+    res = await fetch(API_BASE + path, { ...opts, headers });
+  } catch (e) {
+    apiOnline = false;
+    throw e;
+  }
+  apiOnline = true;
+  if (res.status === 401 && state.token) {
+    // 令牌失效：静默清除，本地数据与用户态保留（降级可用）
+    state.token = null;
+    saveState();
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.error || "网络错误，请稍后再试");
+    err.status = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+function formatPlays(n) {
+  n = Number(n) || 0;
+  if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, "") + "万";
+  return String(n);
+}
+
+/** 远程故事没有 mapPin 时的兜底：经纬度归一化投影到地图舞台百分比坐标 */
+function projectMapPin(lat, lng) {
+  if (typeof lat !== "number" || typeof lng !== "number") return { x: 50, y: 50 };
+  const lats = STORIES.map((s) => s.lat).filter((v) => typeof v === "number");
+  const lngs = STORIES.map((s) => s.lng).filter((v) => typeof v === "number");
+  const minLat = Math.min(...lats, lat);
+  const maxLat = Math.max(...lats, lat);
+  const minLng = Math.min(...lngs, lng);
+  const maxLng = Math.max(...lngs, lng);
+  const x = 15 + ((lng - minLng) / Math.max(1e-9, maxLng - minLng)) * 70;
+  const y = 15 + ((maxLat - lat) / Math.max(1e-9, maxLat - minLat)) * 70;
+  return { x: Math.round(x), y: Math.round(y) };
+}
+
+/** API 字段 → 前端内部字段；本地同 slug 故事提供 mapPin 与正文（手工数据，无法由 API 推导） */
+function mapRemoteStory(r, local) {
+  return {
+    id: r.slug,
+    title: r.title,
+    spot: r.spot,
+    city: r.city,
+    mood: (Array.isArray(r.emotionTags) && r.emotionTags[0]) || "治愈",
+    category: r.category,
+    hook: r.hook,
+    durationMin: Math.max(1, Math.round((Number(r.durationSec) || 0) / 60)),
+    durationSec: Number(r.durationSec) || 0,
+    plays: formatPlays(r.playCount),
+    cover: r.cover,
+    mapPin: (local && local.mapPin) || projectMapPin(r.lat, r.lng),
+    lat: r.lat,
+    lng: r.lng,
+    script: (local && local.script) || "", // 详情接口到达后由 refreshScript 补齐
+    source: (local && local.source) || "",
+  };
+}
+
+async function loadStories() {
+  try {
+    const data = await api("/api/stories");
+    const remote = (data.stories || []).map((r) =>
+      mapRemoteStory(r, BUILTIN_STORIES.find((s) => s.id === r.slug))
+    );
+    if (remote.length) {
+      STORIES = remote;
+      apiOnline = true;
+      rerenderAll();
+    }
+  } catch (_) {
+    apiOnline = false; // 保留内置数据，进入离线演示模式
+  }
+}
+
+/* ================================================================
+   云端同步（登录后启用；合并语义由服务端保证）
+   ================================================================ */
+let syncTimer = null;
+let syncInFlight = null;
+
+function dedupe(arr) {
+  return [...new Set(arr)];
+}
+
+function buildSyncPayload() {
+  return {
+    favorites: state.favIds.slice(),
+    favoritesRemoved: state.favRemoved.slice(),
+    progress: { ...state.playbackProgress },
+    completed: Object.keys(state.playbackCompleted).filter(
+      (k) => state.playbackCompleted[k]
+    ),
+    history: state.historyIds.slice(),
+    trip: state.tripIds.slice(),
+    rate: tts.rate,
+  };
+}
+
+/** 采纳服务端合并态：进度/完播只增不减；未知 slug 保留本地待下次 */
+function adoptMergedState(r) {
+  const ignored = new Set(r.ignored || []);
+  state.favIds = dedupe([
+    ...(r.favorites || []),
+    ...state.favIds.filter((id) => ignored.has(id)),
+  ]);
+  for (const [slug, sec] of Object.entries(r.progress || {})) {
+    state.playbackProgress[slug] = Math.max(
+      state.playbackProgress[slug] || 0,
+      Number(sec) || 0
+    );
+  }
+  for (const slug of r.completed || []) state.playbackCompleted[slug] = true;
+  state.historyIds = dedupe([
+    ...state.historyIds.filter((id) => ignored.has(id)),
+    ...(r.history || []),
+  ]).slice(0, 50);
+  state.tripIds = dedupe([
+    ...(r.trip || []),
+    ...state.tripIds.filter((id) => ignored.has(id)),
+  ]);
+  state.favRemoved = state.favRemoved.filter((id) => ignored.has(id));
+  state.syncedAt = r.syncedAt || null;
+}
+
+function syncNow() {
+  if (!state.token || !apiOnline) return Promise.resolve(null);
+  if (syncInFlight) return syncInFlight;
+  syncInFlight = (async () => {
+    try {
+      const r = await api("/api/sync", {
+        method: "POST",
+        body: JSON.stringify(buildSyncPayload()),
+        keepalive: true,
+      });
+      const firstSync = !state.syncedAt;
+      adoptMergedState(r);
+      saveState();
+      rerenderUserViews();
+      if (firstSync) toast("☁️ 云端同步已开启");
+      return r;
+    } catch (_) {
+      return null; // 失败已由 api() 置 apiOnline=false
+    } finally {
+      syncInFlight = null;
+    }
+  })();
+  return syncInFlight;
+}
+
+function scheduleSync() {
+  if (!state.token || !apiOnline) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(syncNow, 5000);
+}
+
+function rerenderUserViews() {
+  renderMeStats();
+  renderHistoryList();
+  renderFavList();
+  renderTripList();
+  renderFeed();
+}
+
+function rerenderAll() {
+  rerenderUserViews();
+  renderMapPins();
+  renderCityTags();
+  if (state.mapSelectedId) selectMapStory(state.mapSelectedId);
+}
 
 /* ================================================================
    DOM 工具
@@ -902,19 +1095,24 @@ function addToHistory(id) {
   renderHistoryList();
   renderMeStats();
   saveState();
+  scheduleSync();
 }
 
 function toggleFav(id) {
   if (state.favIds.includes(id)) {
     state.favIds = state.favIds.filter((x) => x !== id);
+    // 记录取消，防止云合并后复活
+    if (!state.favRemoved.includes(id)) state.favRemoved.push(id);
     toast("已取消收藏");
   } else {
     state.favIds.push(id);
+    state.favRemoved = state.favRemoved.filter((x) => x !== id);
     toast("已收藏");
   }
   renderFavList();
   renderMeStats();
   saveState();
+  scheduleSync();
 }
 
 function addToTrip(id) {
@@ -927,6 +1125,7 @@ function addToTrip(id) {
   renderTripList();
   renderMeStats();
   saveState();
+  scheduleSync();
 }
 
 /* ================================================================
@@ -1102,6 +1301,7 @@ function ttsFinish() {
   updateTtsPlayBtn();
   renderFeed();
   toast("故事已听完，为你推荐下一个 👇");
+  scheduleSync();
 }
 
 function stopTts() {
@@ -1203,6 +1403,48 @@ function openPlayer(id) {
   updateTtsPlayBtn();
 
   ttsSpeakFrom(tts.idx);
+
+  // 异步拉取 API 详情正文（本地正文先行开播，远程到达后按条件热替换）
+  refreshScript(s);
+}
+
+/** 获取远程正文并缓存；仅当还没真正开读（第 0 句、<1s）时热替换，否则下次打开生效 */
+async function refreshScript(s) {
+  if (!apiOnline) return;
+  if (scriptCache[s.id]) {
+    applyScript(s, scriptCache[s.id]);
+    return;
+  }
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 3000);
+  try {
+    const d = await api("/api/stories/" + encodeURIComponent(s.id), {
+      signal: ctrl.signal,
+    });
+    const detail = d.story || {};
+    scriptCache[s.id] = {
+      script: detail.script || s.script,
+      source: detail.sourceNote || s.source,
+    };
+    applyScript(s, scriptCache[s.id]);
+  } catch (_) {
+    /* 保留本地正文 */
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function applyScript(s, { script, source }) {
+  const changed = script && script !== s.script;
+  s.script = script || s.script;
+  s.source = source || s.source;
+  const isCurrent = state.currentPlayId === s.id;
+  if (isCurrent) {
+    $("sourceNote").textContent = `信源说明：${s.source}`;
+  }
+  if (changed && isCurrent && tts.idx === 0 && tts.sentAccumMs < 1000) {
+    ttsSetup(s.id, script); // 尚未真正开读：热替换正文
+  }
 }
 
 function updateFavButtonState() {
@@ -1233,6 +1475,7 @@ function _saveCurrentProgress() {
   if (sec <= 0) return;
   state.playbackProgress[id] = sec;
   saveState();
+  scheduleSync();
 }
 
 function bindSpeedButtons() {
@@ -1309,9 +1552,10 @@ function bindAudioUi() {
     }
   }, 10000);
 
-  // 页面卸载前保存进度
+  // 页面卸载前保存进度 + 立即同步（keepalive fetch）
   window.addEventListener("beforeunload", () => {
     _saveCurrentProgress();
+    syncNow();
   });
 }
 
@@ -1371,25 +1615,66 @@ function bindLogin() {
 
   const isValidPhone = (phone) => /^1\d{10}$/.test(phone);
 
-  $("loginGetCode").addEventListener("click", () => {
+  $("loginGetCode").addEventListener("click", async () => {
+    const btn = $("loginGetCode");
     const phone = ($("loginPhoneInput").value || "").trim();
     if (!isValidPhone(phone)) {
       toast("请输入正确的 11 位手机号");
       return;
     }
     if (!codeSent) {
+      // 第一步：发送验证码（API 可用时真实入库，验证码随响应返回）
+      if (apiOnline) {
+        btn.disabled = true;
+        try {
+          const r = await api("/api/auth/sms/send", {
+            method: "POST",
+            body: JSON.stringify({ phone }),
+          });
+          sentPhone = phone;
+          toast(`验证码已发送（演示环境验证码：${r.devCode}）`);
+        } catch (_) {
+          toast("验证码已发送（演示：输入任意 6 位）"); // API 不可达 → 本地演示
+        } finally {
+          btn.disabled = false;
+        }
+      } else {
+        toast("验证码已发送（演示：输入任意 6 位）");
+      }
       codeSent = true;
       $("loginCodeRow").classList.remove("hidden");
-      $("loginGetCode").textContent = "登录";
-      toast("验证码已发送（演示：输入任意 6 位）");
+      btn.textContent = "登录";
       $("loginCodeInput").focus();
       return;
     }
+    // 第二步：校验验证码并登录
     const code = ($("loginCodeInput").value || "").trim();
     if (code.length < 4) {
       toast("请输入验证码");
       return;
     }
+    if (apiOnline) {
+      btn.disabled = true;
+      try {
+        const r = await api("/api/auth/sms/verify", {
+          method: "POST",
+          body: JSON.stringify({ phone: sentPhone || phone, code }),
+        });
+        state.token = r.token;
+        saveState();
+        hide();
+        setUser(r.user);
+        toast("登录成功，正在同步云端数据…");
+        await syncNow();
+        toast("登录成功，数据已同步 ✨");
+      } catch (e) {
+        toast(e.message || "验证失败，请重试");
+      } finally {
+        btn.disabled = false;
+      }
+      return;
+    }
+    // 离线演示：任意 ≥4 位验证码（原 mock 流程）
     hide();
     setUser({
       type: "phone",
@@ -1397,13 +1682,13 @@ function bindLogin() {
       nickname: "旅人" + phone.slice(-4),
       loginAt: Date.now(),
     });
-    toast("登录成功，欢迎回来 ✨");
+    toast("登录成功，欢迎回来 ✨（离线演示）");
   });
 
   $("loginWechat").addEventListener("click", () => {
     hide();
     setUser({ type: "wechat", nickname: "微信用户", loginAt: Date.now() });
-    toast("微信登录成功");
+    toast("微信登录成功（云端同步即将上线）");
   });
 
   $("loginSkip").addEventListener("click", hide);
@@ -1413,6 +1698,7 @@ function bindLogin() {
    账号（演示版：登录状态持久化 + 退出登录）
    ================================================================ */
 let codeSent = false;
+let sentPhone = null; // 发码时的手机号（防止验证时换号）
 let logoutConfirmTimer = null;
 
 function setUser(u) {
@@ -1423,6 +1709,8 @@ function setUser(u) {
 
 function logout() {
   state.user = null;
+  state.token = null;
+  state.favRemoved = [];
   saveState();
   renderMeUser();
   toast("已退出登录，本地数据已保留");
@@ -1431,6 +1719,7 @@ function logout() {
 function openLoginOverlay() {
   // 重置验证码流程与表单
   codeSent = false;
+  sentPhone = null;
   $("loginPhoneInput").value = "";
   $("loginCodeInput").value = "";
   $("loginCodeRow").classList.add("hidden");
@@ -1657,6 +1946,14 @@ function init() {
       }, 3000);
     }
   }
+
+  // 拉取 API 故事数据（失败自动回退内置数据）；登录态则启动云端同步
+  loadStories().then(() => {
+    if (state.token && apiOnline) {
+      syncNow(); // 拉取/推送合并
+      api("/api/me").catch(() => {}); // 校验令牌；失效由 api() 静默清除
+    }
+  });
 }
 
 init();

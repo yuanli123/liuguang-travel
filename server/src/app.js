@@ -33,6 +33,10 @@ app.get("/", (req, res) => {
       "GET /api/stories           已上架故事列表（可加 ?city=北京 过滤）",
       "GET /api/stories/:id       故事详情（如 /api/stories/kunming）",
       "GET /api/cities            城市及故事数量",
+      "POST /api/auth/sms/send    发送登录验证码（开发期随响应返回）",
+      "POST /api/auth/sms/verify  校验验证码并登录（返回 JWT）",
+      "GET /api/me                当前登录用户",
+      "POST /api/sync             收藏/进度/历史/行程 云端合并同步",
     ],
   });
 });
@@ -41,6 +45,10 @@ app.get("/", (req, res) => {
 app.use("/api/health", require("./routes/health"));
 app.use("/api/stories", require("./routes/stories"));
 app.use("/api/cities", require("./routes/cities"));
+const auth = require("./routes/auth");
+app.use("/api/auth", auth);
+app.get("/api/me", auth.me);
+app.use("/api/sync", require("./routes/sync"));
 
 // 404 兜底（统一中文 JSON）
 app.use((req, res) => {
