@@ -1,6 +1,9 @@
-/** GET /api/stories 与 GET /api/stories/:id —— 故事列表与详情 */
+/** GET /api/stories、GET /api/stories/:id 与 POST /api/stories/:id/report */
 const express = require("express");
+const jwt = require("jsonwebtoken");
 const pool = require("../db");
+const config = require("../config");
+const { extractToken } = require("../middleware/auth");
 
 const router = express.Router();
 
@@ -53,8 +56,9 @@ router.get("/", async (req, res) => {
     params.push(String(city));
   }
   const where = "WHERE " + conditions.join(" AND ");
+  // C5 推荐逻辑：按播放量热度排序（MVP 简化规则；同热度按 id 稳定排序）
   const [rows] = await pool.query(
-    `SELECT ${BASE_COLUMNS} ${BASE_FROM} ${where} ORDER BY s.id ASC`,
+    `SELECT ${BASE_COLUMNS} ${BASE_FROM} ${where} ORDER BY s.play_count DESC, s.id ASC`,
     params
   );
   const stories = rows.map((r) => ({
@@ -98,6 +102,44 @@ router.get("/:id", async (req, res) => {
   }));
 
   res.json({ story });
+});
+
+/** POST /api/stories/:id/report —— 提交内容纠错（游客可提交；带有效 JWT 自动关联用户）
+ *  本阶段无频率限制（记录可事后清理），接入风控时复用 auth.js 的 60s 限频模式 */
+router.post("/:id/report", async (req, res) => {
+  const { content } = req.body || {};
+  if (
+    typeof content !== "string" ||
+    content.trim().length < 5 ||
+    content.trim().length > 500
+  ) {
+    return res.status(400).json({ error: "纠错内容需在5-500字之间" });
+  }
+  // 可选认证：令牌有效则记 user_id，无效/缺失按游客处理（表结构允许 user_id 为 NULL）
+  let userId = null;
+  const token = extractToken(req);
+  if (token) {
+    try {
+      userId = Number(jwt.verify(token, config.jwtSecret).sub);
+    } catch (_) {
+      /* 无效令牌按游客 */
+    }
+  }
+  const id = req.params.id;
+  const byId = /^\d+$/.test(id); // 与 GET /:id 同规则：slug 或数字 ID
+  // 注意：PUBLISHED 常量带 s. 别名前缀，查询必须 FROM stories s
+  const [rows] = await pool.query(
+    `SELECT s.id FROM stories s WHERE (${byId ? "s.id = ?" : "s.slug = ?"}) AND ${PUBLISHED}`,
+    [byId ? Number(id) : id]
+  );
+  if (!rows.length) {
+    return res.status(404).json({ error: "故事不存在或已下架" });
+  }
+  const [r] = await pool.query(
+    "INSERT INTO story_reports (user_id, story_id, content) VALUES (?, ?, ?)",
+    [userId, rows[0].id, content.trim()]
+  );
+  res.json({ ok: true, id: Number(r.insertId) });
 });
 
 module.exports = router;

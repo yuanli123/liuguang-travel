@@ -1308,6 +1308,30 @@ input {
   font-size: 20px;
 }
 
+/* ========== 内容纠错 sheet（复用 .sheet/.sheet-scrim；z 高于播放器100，低于登录200/toast300） ========== */
+.report-scrim { z-index: 180; }
+.report-sheet { z-index: 185; }
+.report-context {
+  margin: 0 0 12px;
+  color: var(--text-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.report-textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 12px;
+  border: 1px solid #e0dcd8;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--cream);
+  resize: vertical;
+  margin-bottom: 14px;
+}
+.report-textarea:focus { outline: 2px solid var(--violet); }
+
 .preview-one-liner {
   margin: 0 0 14px;
   color: var(--text-soft);

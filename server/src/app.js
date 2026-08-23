@@ -37,6 +37,9 @@ app.get("/", (req, res) => {
       "POST /api/auth/sms/verify  校验验证码并登录（返回 JWT）",
       "GET /api/me                当前登录用户",
       "POST /api/sync             收藏/进度/历史/行程 云端合并同步",
+      "POST /api/stories/:id/report  提交内容纠错（游客可提交，5-500字）",
+      "GET /api/admin/reports        纠错列表（需 ADMIN_TOKEN，?status=0/1/2）",
+      "POST /api/admin/reports/:id/resolve  处理纠错（需 ADMIN_TOKEN）",
     ],
   });
 });
@@ -49,6 +52,7 @@ const auth = require("./routes/auth");
 app.use("/api/auth", auth);
 app.get("/api/me", auth.me);
 app.use("/api/sync", require("./routes/sync"));
+app.use("/api/admin", require("./routes/admin"));
 
 // 404 兜底（统一中文 JSON）
 app.use((req, res) => {

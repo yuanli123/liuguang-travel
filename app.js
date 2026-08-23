@@ -1600,6 +1600,87 @@ function closePreview() {
 }
 
 /* ================================================================
+   内容纠错 Sheet（动态注入到 body，不改动 index.html）
+   ================================================================ */
+let reportEls = null; // 惰性构建一次，复用节点，用 .hidden 切换
+
+function buildReportSheet() {
+  if (reportEls) return reportEls;
+  const scrim = document.createElement("div");
+  scrim.className = "sheet-scrim report-scrim hidden"; // 复用预览 scrim 样式，仅覆盖 z-index
+  const sheet = document.createElement("div");
+  sheet.className = "sheet report-sheet hidden"; // 复用 .sheet/.sheet-handle 弹层样式
+  sheet.innerHTML = `
+    <div class="sheet-handle"></div>
+    <h3>内容纠错</h3>
+    <p class="report-context"></p>
+    <textarea class="report-textarea" placeholder="请指出事实错误或补充资料，5-500字"></textarea>
+    <button type="button" class="btn-primary-block" id="reportSubmit">提交反馈</button>
+    <button type="button" class="link-btn" id="reportCancel">取消</button>
+  `;
+  sheet.querySelector("#reportCancel").addEventListener("click", closeReportSheet);
+  sheet.querySelector("#reportSubmit").addEventListener("click", submitReport);
+  scrim.addEventListener("click", closeReportSheet);
+  document.body.appendChild(scrim);
+  document.body.appendChild(sheet);
+  reportEls = {
+    scrim,
+    sheet,
+    context: sheet.querySelector(".report-context"),
+    textarea: sheet.querySelector(".report-textarea"),
+    submit: sheet.querySelector("#reportSubmit"),
+  };
+  return reportEls;
+}
+
+function openReportSheet() {
+  const id = state.currentPlayId;
+  const s = id ? getStory(id) : null;
+  if (!s) return;
+  const els = buildReportSheet();
+  els.context.textContent = `正在纠错：《${s.title}》 · ${s.spot}`; // textContent 防注入
+  els.textarea.value = "";
+  els.sheet.classList.remove("hidden");
+  els.scrim.classList.remove("hidden");
+  setTimeout(() => els.textarea.focus(), 50);
+}
+
+function closeReportSheet() {
+  if (!reportEls) return;
+  reportEls.sheet.classList.add("hidden");
+  reportEls.scrim.classList.add("hidden");
+}
+
+async function submitReport() {
+  const els = buildReportSheet();
+  const content = els.textarea.value.trim();
+  if (content.length < 5 || content.length > 500) {
+    toast("纠错内容需在5-500字之间");
+    return;
+  }
+  if (!apiOnline) {
+    toast("当前为离线模式，反馈暂无法提交");
+    return; // 保留弹层与草稿，用户可稍后重试
+  }
+  const id = state.currentPlayId;
+  if (!id) return;
+  els.submit.disabled = true;
+  try {
+    await api(`/api/stories/${encodeURIComponent(id)}/report`, {
+      method: "POST",
+      body: JSON.stringify({ content }),
+    });
+    toast("反馈已提交，感谢纠错 🙏");
+    closeReportSheet();
+  } catch (e) {
+    // 网络失败时 api() 已置 apiOnline=false → 离线提示；业务错误用中文 e.message
+    toast(apiOnline ? e.message : "当前为离线模式，反馈暂无法提交");
+  } finally {
+    els.submit.disabled = false;
+  }
+}
+
+/* ================================================================
    登录
    ================================================================ */
 function bindLogin() {
@@ -1882,9 +1963,7 @@ function init() {
     const next = getNextRecommend(state.currentPlayId);
     openPlayer(next.id);
   });
-  $("btnReport").addEventListener("click", () => {
-    toast("感谢反馈！正式版将跳转纠错表单（演示）");
-  });
+  $("btnReport").addEventListener("click", openReportSheet);
 
   // Feed 事件
   $("btnRandomListen").addEventListener("click", randomListen);
@@ -1921,12 +2000,14 @@ function init() {
     speechSynthesis.getVoices();
   }
 
-  // 全局键盘事件
+  // 全局键盘事件（纠错弹层优先关闭，其次播放器）
   document.addEventListener("keydown", (e) => {
-    if (
-      e.key === "Escape" &&
-      !$("playerOverlay").classList.contains("hidden")
-    ) {
+    if (e.key !== "Escape") return;
+    if (reportEls && !reportEls.sheet.classList.contains("hidden")) {
+      closeReportSheet(); // 只关纠错弹层，播放器保持打开
+      return;
+    }
+    if (!$("playerOverlay").classList.contains("hidden")) {
       closePlayer();
     }
   });

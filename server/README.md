@@ -104,10 +104,34 @@ curl http://localhost:3000/api/cities
 | `POST /api/auth/sms/verify` | 校验验证码并登录/注册，返回 JWT（30 天有效） |
 | `GET /api/me` | 当前登录用户（需 `Authorization: Bearer <token>`） |
 | `POST /api/sync` | 收藏/进度/完播/历史/行程云端合并同步（需登录） |
+| `POST /api/stories/:id/report` | 提交内容纠错（游客可提交，5-500 字） |
+| `GET /api/admin/reports` | 纠错列表，最新在前（需 `ADMIN_TOKEN`，可选 `?status=0/1/2`） |
+| `POST /api/admin/reports/:id/resolve` | 处理纠错 `{status:1已采纳|2已驳回}`（需 `ADMIN_TOKEN`） |
 
 错误统一返回中文 JSON：`{"error":"..."}`；未知接口返回 404 `{"error":"接口不存在"}`。
 
 > **开发期登录说明**：短信发送接口会返回 `devCode`（并在服务端控制台打印），前端 App 会把验证码显示在 toast 里，输入即可登录。接入真实短信服务后（阶段二 B1），`devCode` 在生产环境（`NODE_ENV=production`）自动不下发。
+
+### 内容纠错
+
+```bash
+# 游客提交纠错（无需登录）
+curl -X POST http://localhost:3000/api/stories/kunming/report \
+  -H "Content-Type: application/json" \
+  -d '{"content":"十七孔桥的金光穿洞实际出现在冬至前后"}'
+
+# 管理员查看待处理纠错（把 <admin> 换成 .env 里的 ADMIN_TOKEN）
+curl http://localhost:3000/api/admin/reports?status=0 \
+  -H "Authorization: Bearer <admin>"
+
+# 采纳（1）或驳回（2）某条纠错
+curl -X POST http://localhost:3000/api/admin/reports/1/resolve \
+  -H "Authorization: Bearer <admin>" \
+  -H "Content-Type: application/json" \
+  -d '{"status":1}'
+```
+
+> 已知限制：纠错提交暂无频率限制（游客可重复提交，属本阶段接受的 MVP 简化）；后台处理人字段（resolved_by）暂不记录。
 
 ## 故事数据更新
 
