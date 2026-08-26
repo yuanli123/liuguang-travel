@@ -1,16 +1,15 @@
 @echo off
-chcp 65001 >nul
-rem 流光幻旅 · 一键启动（双击本文件）
-rem 会弹出两个命令行窗口：前端(8123) + 后端(3000)，关闭窗口即停止服务
+rem Liuguang Travel launcher (double-click to start)
+rem Opens two console windows: frontend (8123) + backend (3000). Close them to stop.
 
-echo 正在启动流光幻旅...
-echo 前端：http://localhost:8123
-echo 后端：http://localhost:3000
+echo Starting Liuguang Travel...
+echo Frontend: http://localhost:8123
+echo Backend:  http://localhost:3000
 echo.
 
-start "流光幻旅-前端(8123)" cmd /k "cd /d "%~dp0" && python -m http.server 8123"
-start "流光幻旅-后端(3000)" cmd /k "cd /d "%~dp0server" && npm run dev"
+start "Liuguang-frontend(8123)" /D "%~dp0" cmd /k "chcp 65001 >nul && python -m http.server 8123"
+start "Liuguang-backend(3000)" /D "%~dp0server" cmd /k "chcp 65001 >nul && npm run dev"
 
-echo 已启动两个服务窗口。浏览器打开 http://localhost:8123 即可使用。
-echo 关闭对应窗口即可停止服务。
-timeout /t 5
+echo Two service windows opened. Visit http://localhost:8123 in your browser.
+echo You can close THIS window anytime; the two services keep running.
+pause
