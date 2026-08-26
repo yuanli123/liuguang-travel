@@ -349,6 +349,8 @@ const defaultState = {
   playbackCompleted: {}, // { storyId: true } — 已完播
   userLat: null,
   userLng: null,
+  userCity: null, // 定位反查出的城市（高德逆地理编码）
+  coarseLoc: false, // true = IP 粗略定位（城市级，不做 200m 检测）
   locationGranted: false,
   token: null, // 云端登录令牌（JWT）
   favRemoved: [], // 已取消收藏待同步的 slug（防止云合并后复活）
@@ -393,6 +395,10 @@ const state = loadState();
 const API_BASE = "http://localhost:3000";
 let apiOnline = false; // 最近一次请求成功即 true；失败即 false
 const scriptCache = {}; // slug -> { script, source }（详情正文缓存）
+
+// 高德开放平台 Web端（JS API）Key；安全密钥明文方式仅限本地开发，上线需换服务端代理
+const AMAP_KEY = "d6c071bd48d515187d4cea2a72aa849c";
+const AMAP_SECURITY_CODE = "2bcc830b6bd2c705752ba25377a1de99";
 
 async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
@@ -639,6 +645,73 @@ function bindNav() {
 /* ================================================================
    地理定位服务
    ================================================================ */
+let amapPromise = null;
+
+/** 惰性加载高德 JS API（仅定位时需要，~1MB）；失败/超时 resolve(null)，后续走原生定位 */
+function loadAmap() {
+  if (amapPromise) return amapPromise;
+  amapPromise = new Promise((resolve) => {
+    // 安全密钥必须在 JS API 脚本加载之前设置，否则无效
+    window._AMapSecurityConfig = { securityJsCode: AMAP_SECURITY_CODE };
+    const s = document.createElement("script");
+    const timer = setTimeout(() => resolve(null), 12000); // 12s 超时兜底
+    s.src = `https://webapi.amap.com/maps?v=2.0&key=${AMAP_KEY}`;
+    s.onload = () => {
+      clearTimeout(timer);
+      resolve(window.AMap || null);
+    };
+    s.onerror = () => {
+      clearTimeout(timer);
+      resolve(null);
+    };
+    document.head.appendChild(s);
+  });
+  return amapPromise;
+}
+
+/** 高德定位：浏览器 GPS 优先，权限拒绝时自动 IP 城市级兜底，并逆地理编码出城市名 */
+function amapLocate(onDone) {
+  let settled = false;
+  const finish = (r) => {
+    if (!settled) {
+      settled = true;
+      onDone(r);
+    }
+  };
+  const guard = setTimeout(() => finish({ ok: false }), 15000); // 插件级超时保护
+  try {
+    AMap.plugin("AMap.Geolocation", () => {
+      const geo = new AMap.Geolocation({
+        enableHighAccuracy: true,
+        timeout: 10000,
+        needAddress: true,
+        extensions: "all",
+      });
+      geo.getCurrentPosition((status, result) => {
+        clearTimeout(guard);
+        if (status === "complete" && result && result.position) {
+          const ac = result.addressComponent || {};
+          // 直辖市 city 为空时取 province；统一去「市」后缀对齐 CITIES 列表
+          const city = String(ac.city || ac.province || "").replace(/市$/, "");
+          finish({
+            ok: true,
+            lat: result.position.lat,
+            lng: result.position.lng,
+            city,
+            coarse: result.location_type === "ip", // IP 定位 = 城市级粗略坐标
+            accuracy: result.accuracy || 0,
+          });
+        } else {
+          finish({ ok: false });
+        }
+      });
+    });
+  } catch (_) {
+    clearTimeout(guard);
+    finish({ ok: false });
+  }
+}
+
 function calcDistance(lat1, lng1, lat2, lng2) {
   const R = 6371000; // 地球半径（米）
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -654,7 +727,7 @@ function calcDistance(lat1, lng1, lat2, lng2) {
 }
 
 function getNearbyStories(radiusMeters = 200) {
-  if (state.userLat == null || state.userLng == null) return [];
+  if (state.userLat == null || state.userLng == null || state.coarseLoc) return [];
   return STORIES.filter((s) => {
     const d = calcDistance(state.userLat, state.userLng, s.lat, s.lng);
     return d <= radiusMeters;
@@ -666,7 +739,20 @@ function formatDistance(meters) {
   return `${(meters / 1000).toFixed(1)}km`;
 }
 
-function requestUserLocation() {
+async function requestUserLocation() {
+  const amap = await loadAmap();
+  if (amap) {
+    amapLocate((r) => {
+      if (r.ok) applyLocation(r);
+      else nativeLocate(); // 高德失败：回退原生定位
+    });
+    return;
+  }
+  nativeLocate();
+}
+
+/** 原生浏览器定位（高德不可用时的兜底，无城市反查） */
+function nativeLocate() {
   if (!navigator.geolocation) {
     toast("当前浏览器不支持地理定位");
     return;
@@ -674,37 +760,101 @@ function requestUserLocation() {
 
   navigator.geolocation.getCurrentPosition(
     (pos) => {
-      state.userLat = pos.coords.latitude;
-      state.userLng = pos.coords.longitude;
-      state.locationGranted = true;
-      saveState();
-      toast(`已定位（精度约 ${Math.round(pos.coords.accuracy)}m）`);
-      updateMapLocationUI();
-      checkNearbyProximity();
+      applyLocation({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        city: null,
+        coarse: false,
+        accuracy: pos.coords.accuracy,
+      });
     },
     (err) => {
-      state.locationGranted = false;
-      saveState();
-      switch (err.code) {
-        case err.PERMISSION_DENIED:
-          toast("定位权限被拒绝，可手动搜索城市");
-          break;
-        case err.TIMEOUT:
-          toast("定位超时，请重试");
-          break;
-        default:
-          toast("定位失败，可手动搜索城市");
-      }
+      fetchIpCity().then((ok) => {
+        if (ok) return; // IP 城市兜底成功，不再弹错误提示
+        state.locationGranted = false;
+        saveState();
+        switch (err.code) {
+          case err.PERMISSION_DENIED:
+            toast("定位权限被拒绝，可手动搜索城市");
+            break;
+          case err.TIMEOUT:
+            toast("定位超时，请重试");
+            break;
+          default:
+            toast("定位失败，可手动搜索城市");
+        }
+      });
     },
     { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
   );
+}
+
+/** 定位成功的统一落点：写状态、toast、刷新角标与附近检测 */
+function applyLocation({ lat, lng, city, coarse, accuracy }) {
+  state.userLat = lat;
+  state.userLng = lng;
+  state.userCity = city || null;
+  state.coarseLoc = !!coarse;
+  state.locationGranted = true;
+  saveState();
+
+  if (coarse) {
+    toast(`已定位到所在城市（${city || "粗略位置"}）`);
+  } else if (accuracy > 0) {
+    toast(`已定位（精度约 ${Math.round(accuracy)}m）`);
+  } else {
+    toast("已定位");
+  }
+  updateMapLocationUI();
+  applyLocatedCity(city);
+  if (!coarse) checkNearbyProximity(); // IP 粗略坐标不触发 200m 检测
+}
+
+/** 定位出城市后自动切换城市筛选（仅当用户还停留在「全部」，手动选过的不抢） */
+function applyLocatedCity(city) {
+  const name = String(city || "").replace(/市$/, "");
+  if (!name || !CITIES.includes(name)) return false;
+  if (state.cityFilter !== "全部") return false;
+  state.cityFilter = name;
+  saveState();
+  renderCityTags();
+  renderFeed();
+  return true;
+}
+
+/** IP 城市级兜底（无坐标）：只更新城市与筛选，不覆盖已有精确坐标 */
+function applyIpCity(city) {
+  const name = String(city || "").replace(/市$/, "");
+  if (!name) return;
+  state.userCity = name;
+  state.coarseLoc = true;
+  state.locationGranted = true;
+  saveState();
+  updateMapLocationUI();
+  applyLocatedCity(name);
+  toast(`已定位到所在城市（${name}）`);
+}
+
+/** 高德 IP 定位不可用时的兜底：经自家后端查 IP 所在城市（城市级、无坐标） */
+async function fetchIpCity() {
+  if (!apiOnline) return false;
+  try {
+    const data = await api("/api/geo/ip");
+    if (data && data.city) {
+      applyIpCity(data.city);
+      return true;
+    }
+  } catch (_) {
+    /* 后端兜底也失败：走原有错误提示 */
+  }
+  return false;
 }
 
 function updateMapLocationUI() {
   const existing = document.querySelector(".map-location-status");
   if (existing) existing.remove();
 
-  if (state.userLat != null && state.userLng != null) {
+  if ((state.userLat != null && state.userLng != null) || state.userCity != null) {
     const badge = document.createElement("div");
     badge.className = "map-location-status";
     badge.style.cssText =
@@ -712,7 +862,7 @@ function updateMapLocationUI() {
       "padding:6px 12px;border-radius:999px;" +
       "background:rgba(46,196,182,.9);color:#fff;font-size:12px;font-weight:600;" +
       "box-shadow:0 2px 12px rgba(46,196,182,.35);";
-    badge.textContent = "📍 已定位";
+    badge.textContent = state.userCity ? `📍 已定位 · ${state.userCity}` : "📍 已定位";
     badge.addEventListener("click", requestUserLocation);
     $("mapStage").appendChild(badge);
   }
@@ -743,24 +893,45 @@ function checkNearbyProximity() {
   });
 }
 
-// 初始化时恢复定位
+// 初始化时恢复定位（静默更新：优先高德含城市反查，失败回退原生）
 function initGeolocation() {
-  if (state.locationGranted && state.userLat != null) {
-    updateMapLocationUI();
-    // 静默更新位置
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          state.userLat = pos.coords.latitude;
-          state.userLng = pos.coords.longitude;
+  if (!state.locationGranted || state.userLat == null) return;
+  updateMapLocationUI();
+  loadAmap().then((amap) => {
+    if (amap) {
+      amapLocate((r) => {
+        if (r.ok) {
+          state.userLat = r.lat;
+          state.userLng = r.lng;
+          state.userCity = r.city || null;
+          state.coarseLoc = !!r.coarse;
           saveState();
           updateMapLocationUI();
-        },
-        () => {},
-        { enableHighAccuracy: false, timeout: 6000, maximumAge: 120000 }
-      );
+          applyLocatedCity(r.city);
+        } else {
+          nativeLocateSilent();
+        }
+      });
+      return;
     }
-  }
+    nativeLocateSilent();
+  });
+}
+
+/** 原生静默定位（无 toast，失败忽略） */
+function nativeLocateSilent() {
+  if (!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      state.userLat = pos.coords.latitude;
+      state.userLng = pos.coords.longitude;
+      state.coarseLoc = false;
+      saveState();
+      updateMapLocationUI();
+    },
+    () => {},
+    { enableHighAccuracy: false, timeout: 6000, maximumAge: 120000 }
+  );
 }
 
 /* ================================================================
@@ -1370,7 +1541,13 @@ function openPlayer(id) {
   $("playerBg").style.backgroundImage = `url(${s.cover})`;
   $("playerMood").textContent = s.mood;
   $("playerTitle").textContent = s.title;
-  $("playerLoc").textContent = s.spot;
+  // 有定位时显示真实距离（与地图卡模式一致）
+  if (state.userLat != null && state.userLng != null && typeof s.lat === "number") {
+    const dist = calcDistance(state.userLat, state.userLng, s.lat, s.lng);
+    $("playerLoc").textContent = `${s.spot} · 距你 ${formatDistance(dist)}`;
+  } else {
+    $("playerLoc").textContent = s.spot;
+  }
   $("playerHook").textContent = s.hook;
   $("sourceNote").textContent = `信源说明：${s.source}`;
 

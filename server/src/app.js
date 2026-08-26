@@ -40,6 +40,7 @@ app.get("/", (req, res) => {
       "POST /api/stories/:id/report  提交内容纠错（游客可提交，5-500字）",
       "GET /api/admin/reports        纠错列表（需 ADMIN_TOKEN，?status=0/1/2）",
       "POST /api/admin/reports/:id/resolve  处理纠错（需 ADMIN_TOKEN）",
+      "GET /api/geo/ip              IP→城市（定位权限被拒时的兜底）",
     ],
   });
 });
@@ -53,6 +54,7 @@ app.use("/api/auth", auth);
 app.get("/api/me", auth.me);
 app.use("/api/sync", require("./routes/sync"));
 app.use("/api/admin", require("./routes/admin"));
+app.use("/api/geo", require("./routes/geo"));
 
 // 404 兜底（统一中文 JSON）
 app.use((req, res) => {

@@ -107,6 +107,7 @@ curl http://localhost:3000/api/cities
 | `POST /api/stories/:id/report` | 提交内容纠错（游客可提交，5-500 字） |
 | `GET /api/admin/reports` | 纠错列表，最新在前（需 `ADMIN_TOKEN`，可选 `?status=0/1/2`） |
 | `POST /api/admin/reports/:id/resolve` | 处理纠错 `{status:1已采纳|2已驳回}`（需 `ADMIN_TOKEN`） |
+| `GET /api/geo/ip` | IP → 城市（定位权限被拒时的兜底，第三方免费 IP 库，仅城市级） |
 
 错误统一返回中文 JSON：`{"error":"..."}`；未知接口返回 404 `{"error":"接口不存在"}`。
 
@@ -132,6 +133,20 @@ curl -X POST http://localhost:3000/api/admin/reports/1/resolve \
 ```
 
 > 已知限制：纠错提交暂无频率限制（游客可重复提交，属本阶段接受的 MVP 简化）；后台处理人字段（resolved_by）暂不记录。
+
+## 前端定位（高德）
+
+前端 App 接入高德 JS API 定位（阶段二 C1），配置在 `../app.js` 顶部的 `AMAP_KEY` / `AMAP_SECURITY_CODE` 常量：
+
+- 定位链路：高德 Geolocation（浏览器 GPS）→ 权限拒绝时自动 IP 城市级兜底 → 高德不可用时回退浏览器原生定位
+- 高德自带 IP 定位在部分网络环境不可用（运营商 NAT 等）——此时由后端 `GET /api/geo/ip`（第三方免费 IP 库，仅城市级、无坐标）接住，定位被拒也能识别所在城市
+- 定位成功后反查出所在城市，自动切换城市筛选（仅当用户还停留在「全部」）
+- IP 粗略定位只用于城市识别与距离展示，**不触发** 200m 近距离检测（`state.coarseLoc` 守卫）
+- Key 在开放平台控制台添加，服务平台选「Web端（JS API）」；白名单留空即可本地开发（控制台会有警告，属预期）
+
+> ⚠️ 安全密钥当前用**明文方式**（`window._AMapSecurityConfig`），仅限本地开发。正式上线必须改为服务端代理转发（`serviceHost`），避免密钥泄露。
+>
+> 高德脚本约 1MB，前端为惰性加载（仅定位时请求），加载失败不影响其余功能。
 
 ## 故事数据更新
 
