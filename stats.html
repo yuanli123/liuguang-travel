@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>流光幻旅 · 统计看板</title>
+<style>
+  :root {
+    --bg: #0d0d0d;
+    --surface: #1a1a19;
+    --ink: #ffffff;
+    --ink-2: #c3c2b7;
+    --ink-3: #898781;
+    --hairline: #2c2c2a;
+    --brand-1: #8b5cf6; /* App 品牌紫（仅页面镶边，不用于数据编码） */
+    --brand-2: #2ec4b6; /* App 品牌青（同上） */
+    /* 数据系列色（dataviz 验证通过 · dark surface #1a1a19） */
+    --s-new: #3987e5;   /* 新增用户 */
+    --s-play: #d95926;  /* 播放 */
+    --s-fav: #199e70;   /* 收藏 */
+    --s-rep: #c98500;   /* 纠错 */
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+  }
+  .topbar {
+    padding: 18px 24px;
+    background: linear-gradient(120deg, #8b5cf6 0%, #2ec4b6 100%);
+    display: flex; align-items: center; justify-content: space-between;
+    font-weight: 700; font-size: 17px; letter-spacing: .5px;
+  }
+  .topbar button {
+    background: rgba(0,0,0,.25); color: #fff; border: 1px solid rgba(255,255,255,.35);
+    border-radius: 8px; padding: 6px 14px; cursor: pointer; font-size: 13px;
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: 20px 24px 48px; }
+  .panel {
+    background: var(--surface); border: 1px solid var(--hairline);
+    border-radius: 12px; padding: 20px; margin-top: 16px;
+  }
+  .panel h2 { font-size: 15px; color: var(--ink-2); margin-bottom: 14px; font-weight: 600; }
+  .hint { font-size: 12px; color: var(--ink-3); margin-left: 8px; font-weight: 400; }
+
+  /* 令牌门 */
+  #tokenGate {
+    max-width: 420px; margin: 80px auto; background: var(--surface);
+    border: 1px solid var(--hairline); border-radius: 12px; padding: 28px;
+  }
+  #tokenGate h1 { font-size: 16px; margin-bottom: 6px; }
+  #tokenGate p { font-size: 13px; color: var(--ink-3); margin-bottom: 16px; line-height: 1.6; }
+  #tokenGate input {
+    width: 100%; background: var(--bg); border: 1px solid var(--hairline);
+    border-radius: 8px; color: var(--ink); padding: 10px 12px; font-size: 13px; margin-bottom: 12px;
+  }
+  #tokenGate button {
+    width: 100%; background: linear-gradient(120deg, #8b5cf6, #2ec4b6); color: #fff;
+    border: none; border-radius: 8px; padding: 11px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  #tokenErr { color: #e66767; font-size: 12px; min-height: 16px; margin-top: 8px; }
+
+  /* 总览卡片 */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--hairline); border-radius: 12px;
+    padding: 16px; border-top: 3px solid var(--brand-1);
+  }
+  .card .val { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .card .lbl { font-size: 12px; color: var(--ink-2); margin-top: 4px; }
+  .card .sub { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+
+  /* 趋势图（分组柱状） */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .chart { display: flex; align-items: flex-end; gap: 14px; padding: 8px 4px 0; overflow-x: auto; }
+  .day { flex: 1; min-width: 56px; display: flex; flex-direction: column; align-items: center; }
+  .bars { display: flex; align-items: flex-end; gap: 2px; height: 150px; }
+  .bars i {
+    width: 9px; display: block; border-radius: 4px 4px 0 0;
+    min-height: 2px; /* 0 值也有 2px 底点，可点击 */
+    transition: filter .15s;
+  }
+  .bars i:hover { filter: brightness(1.25); }
+  .day .dlabel { font-size: 11px; color: var(--ink-3); margin-top: 8px; white-space: nowrap; }
+  .chart-tip {
+    position: fixed; z-index: 50; pointer-events: none;
+    background: #2c2c2a; color: var(--ink); font-size: 12px;
+    padding: 6px 10px; border-radius: 8px; border: 1px solid #383835;
+    display: none; white-space: nowrap;
+  }
+
+  /* 表格 */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: right; padding: 8px 10px; border-bottom: 1px solid var(--hairline); }
+  th { color: var(--ink-3); font-weight: 500; font-size: 12px; }
+  th:first-child, td:first-child { text-align: left; }
+  td.num, th.num { font-variant-numeric: tabular-nums; }
+  tr:hover td { background: #22221f; }
+  .bar-cell { min-width: 90px; }
+  .bar-cell .track { background: var(--hairline); border-radius: 4px; height: 6px; overflow: hidden; }
+  .bar-cell .fill { background: #3987e5; height: 100%; border-radius: 4px; }
+  .empty { color: var(--ink-3); font-size: 13px; padding: 24px 0; text-align: center; }
+
+  /* 纠错区 */
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+  .tabs button {
+    background: transparent; color: var(--ink-2); border: 1px solid var(--hairline);
+    border-radius: 999px; padding: 5px 14px; font-size: 12px; cursor: pointer;
+  }
+  .tabs button.on { background: rgba(139,92,246,.18); border-color: #8b5cf6; color: #fff; }
+  .report { display: flex; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--hairline); align-items: flex-start; }
+  .report .meta { flex: 1; min-width: 0; }
+  .report .story { font-size: 13px; color: var(--ink-2); }
+  .report .story b { color: var(--ink); font-weight: 600; }
+  .report .content { font-size: 13px; margin-top: 4px; line-height: 1.6; }
+  .report .time { font-size: 11px; color: var(--ink-3); margin-top: 4px; }
+  .report .actions { display: flex; gap: 8px; flex-shrink: 0; }
+  .report .actions button {
+    border-radius: 8px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+    border: 1px solid var(--hairline); background: transparent; color: var(--ink-2);
+  }
+  .report .actions .ok { border-color: #199e70; color: #199e70; }
+  .report .actions .no { border-color: #d95926; color: #d95926; }
+  .badge { font-size: 11px; border-radius: 999px; padding: 2px 8px; }
+  .badge.p0 { background: rgba(201,133,0,.18); color: #c98500; }
+  .badge.p1 { background: rgba(25,158,112,.18); color: #199e70; }
+  .badge.p2 { background: rgba(217,89,38,.18); color: #d95926; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <span>流光幻旅 · 统计看板</span>
+  <button id="btnLogout" hidden>退出</button>
+</div>
+
+<div id="tokenGate">
+  <h1>🔐 管理员令牌</h1>
+  <p>输入服务器 .env 里的 ADMIN_TOKEN 进入看板。令牌只保存在本机浏览器 localStorage 中。</p>
+  <input id="tokenInput" type="password" placeholder="粘贴 ADMIN_TOKEN">
+  <button id="btnEnter">进入看板</button>
+  <div id="tokenErr"></div>
+</div>
+
+<main id="dash" hidden>
+  <div class="cards" id="overviewCards"></div>
+
+  <div class="panel">
+    <h2>近 7 日趋势<span class="hint">新增用户 · 播放 · 收藏 · 纠错（按事件时间聚合）</span></h2>
+    <div class="legend" id="trendLegend"></div>
+    <div class="chart" id="trendChart"></div>
+  </div>
+
+  <div class="panel">
+    <h2>故事热度榜<span class="hint">按累计播放排序 · 完播率 = 完播用户 / 播过用户</span></h2>
+    <table>
+      <thead><tr>
+        <th>故事</th><th>城市</th><th class="num">播放</th><th class="num">收藏</th>
+        <th class="num">完播率</th><th class="num">收听时长</th><th class="num">加入行程</th><th class="num">纠错</th>
+      </tr></thead>
+      <tbody id="storyBody"></tbody>
+    </table>
+  </div>
+
+  <div class="panel">
+    <h2>内容纠错<span class="hint">用户提交的纠错，可直接采纳或驳回</span></h2>
+    <div class="tabs" id="reportTabs">
+      <button data-s="" class="on">全部</button>
+      <button data-s="0">待处理</button>
+      <button data-s="1">已采纳</button>
+      <button data-s="2">已驳回</button>
+    </div>
+    <div id="reportList"></div>
+  </div>
+</main>
+
+<div class="chart-tip" id="chartTip"></div>
+
+<script>
+(() => {
+  "use strict";
+  const API = "http://localhost:3000";
+  const TOKEN_KEY = "liuguang_admin_token";
+  const $ = (id) => document.getElementById(id);
+
+  let token = localStorage.getItem(TOKEN_KEY) || "";
+
+  async function api(path) {
+    const res = await fetch(API + path, {
+      headers: token ? { Authorization: "Bearer " + token } : {},
+    });
+    if (res.status === 401) {
+      token = "";
+      localStorage.removeItem(TOKEN_KEY);
+      showGate("令牌无效或已过期，请重新输入");
+      throw new Error("unauthorized");
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || "请求失败");
+    }
+    return res.json();
+  }
+
+  /* ---------- 令牌门 ---------- */
+  function showGate(err) {
+    $("dash").hidden = true;
+    $("btnLogout").hidden = true;
+    $("tokenGate").hidden = false;
+    $("tokenErr").textContent = err || "";
+  }
+  function showDash() {
+    $("tokenGate").hidden = true;
+    $("dash").hidden = false;
+    $("btnLogout").hidden = false;
+    loadAll();
+  }
+  function enter() {
+    const v = $("tokenInput").value.trim();
+    if (!v) { $("tokenErr").textContent = "请输入令牌"; return; }
+    token = v;
+    localStorage.setItem(TOKEN_KEY, v);
+    $("tokenInput").value = "";
+    loadAll();
+  }
+  $("btnEnter").addEventListener("click", enter);
+  $("tokenInput").addEventListener("keydown", (e) => { if (e.key === "Enter") enter(); });
+  $("btnLogout").addEventListener("click", () => { token = ""; localStorage.removeItem(TOKEN_KEY); showGate(); });
+
+  /* ---------- 格式化 ---------- */
+  function fmtPlays(n) {
+    n = Number(n) || 0;
+    if (n >= 10000) return (n / 10000).toFixed(1).replace(/\.0$/, "") + "万";
+    return String(n);
+  }
+  function fmtSec(s) {
+    s = Number(s) || 0;
+    if (s < 60) return s + "秒";
+    if (s < 3600) return (s / 60).toFixed(0) + "分钟";
+    return (s / 3600).toFixed(1) + "小时";
+  }
+  function fmtTime(t) {
+    if (!t) return "";
+    return String(t).slice(0, 16).replace("T", " ");
+  }
+
+  /* ---------- 加载 ---------- */
+  async function loadAll() {
+    await Promise.all([
+      api("/api/admin/stats/overview").then(renderOverview).catch((e) => fail("overview", e)),
+      api("/api/admin/stats/trend?days=7").then(renderTrend).catch((e) => fail("trend", e)),
+      api("/api/admin/stats/stories?limit=20").then(renderStories).catch((e) => fail("stories", e)),
+      loadReports("").catch((e) => fail("reports", e)),
+    ]);
+    if (!token) return; // 401 时 api() 已清令牌并回到令牌门，不再展示看板
+    $("tokenGate").hidden = true;
+    $("dash").hidden = false;
+    $("btnLogout").hidden = false;
+  }
+  function fail(section, e) {
+    console.error("[" + section + "]", e);
+  }
+
+  /* ---------- 总览 ---------- */
+  function renderOverview(o) {
+    const cards = [
+      ["注册用户", String(o.users), ""],
+      ["上架故事", `${o.published} / ${o.stories}`, `${o.cities} 个城市`],
+      ["累计播放", fmtPlays(o.plays), `播放事件 ${o.playEvents}`],
+      ["完播率", o.completeRate + "%", `完播 ${o.completes} 次`],
+      ["收藏", String(o.favorites), ""],
+      ["加入行程", String(o.tripItems), `${o.trips} 个行程`],
+      ["待处理纠错", String(o.reports.pending), `已采纳 ${o.reports.accepted} · 已驳回 ${o.reports.rejected}`],
+    ];
+    $("overviewCards").innerHTML = cards
+      .map(([l, v, s]) => `<div class="card"><div class="val">${v}</div><div class="lbl">${l}</div><div class="sub">${s}</div></div>`)
+      .join("");
+  }
+
+  /* ---------- 趋势（分组柱状，色板经 dataviz 校验） ---------- */
+  const SERIES = [
+    { key: "newUsers", label: "新增用户", color: "#3987e5" },
+    { key: "playEvents", label: "播放", color: "#d95926" },
+    { key: "favorites", label: "收藏", color: "#199e70" },
+    { key: "reports", label: "纠错", color: "#c98500" },
+  ];
+  function renderTrend(d) {
+    $("trendLegend").innerHTML = SERIES
+      .map((s) => `<span><i style="background:${s.color}"></i>${s.label}</span>`)
+      .join("");
+    const max = Math.max(1, ...d.days.flatMap((day) => SERIES.map((s) => day[s.key])));
+    $("trendChart").innerHTML = d.days
+      .map((day) => {
+        const bars = SERIES
+          .map((s) => {
+            const v = day[s.key];
+            const h = Math.max(2, Math.round((v / max) * 148));
+            return `<i data-v="${v}" data-label="${s.label}" data-date="${day.date}"
+                style="height:${h}px;background:${s.color}"></i>`;
+          })
+          .join("");
+        const label = day.date.slice(5);
+        return `<div class="day"><div class="bars">${bars}</div><div class="dlabel">${label}</div></div>`;
+      })
+      .join("");
+    // 悬浮提示
+    const tip = $("chartTip");
+    $("trendChart").querySelectorAll(".bars i").forEach((el) => {
+      el.addEventListener("mouseenter", () => {
+        tip.textContent = `${el.dataset.date} · ${el.dataset.label} ${el.dataset.v}`;
+        tip.style.display = "block";
+      });
+      el.addEventListener("mousemove", (e) => {
+        tip.style.left = e.clientX + 12 + "px";
+        tip.style.top = e.clientY + 12 + "px";
+      });
+      el.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+    });
+  }
+
+  /* ---------- 故事热度榜 ---------- */
+  function renderStories(data) {
+    const rows = data.stories;
+    if (!rows.length) {
+      $("storyBody").innerHTML = `<tr><td colspan="8" class="empty">暂无数据</td></tr>`;
+      return;
+    }
+    const maxPlays = Math.max(1, rows[0].playCount);
+    $("storyBody").innerHTML = rows
+      .map((s) => {
+        const pct = Math.round((s.playCount / maxPlays) * 100);
+        return `<tr>
+          <td><div class="story-title">${escapeHtml(s.title)}</div>
+              <div class="bar-cell"><div class="track"><div class="fill" style="width:${pct}%"></div></div></div></td>
+          <td>${escapeHtml(s.city)}</td>
+          <td class="num">${fmtPlays(s.playCount)}</td>
+          <td class="num">${s.favCount}</td>
+          <td class="num">${s.completeRate}%</td>
+          <td class="num">${fmtSec(s.listenSec)}</td>
+          <td class="num">${s.tripCount}</td>
+          <td class="num">${s.reportCount}</td>
+        </tr>`;
+      })
+      .join("");
+  }
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  /* ---------- 纠错处理 ---------- */
+  let reportFilter = "";
+  async function loadReports(status) {
+    const q = status === "" ? "" : "?status=" + status;
+    const data = await api("/api/admin/reports" + q);
+    renderReports(data.reports);
+  }
+  function renderReports(reports) {
+    if (!reports.length) {
+      $("reportList").innerHTML = `<div class="empty">暂无纠错记录</div>`;
+      return;
+    }
+    $("reportList").innerHTML = reports
+      .map((r) => {
+        const badge = r.status === 0 ? `<span class="badge p0">待处理</span>`
+          : r.status === 1 ? `<span class="badge p1">已采纳</span>`
+          : `<span class="badge p2">已驳回</span>`;
+        const actions = r.status === 0
+          ? `<div class="actions">
+               <button class="ok" data-id="${r.id}" data-s="1">采纳</button>
+               <button class="no" data-id="${r.id}" data-s="2">驳回</button>
+             </div>`
+          : "";
+        return `<div class="report">
+          <div class="meta">
+            <div class="story"><b>${escapeHtml(r.title)}</b> ${badge}</div>
+            <div class="content">${escapeHtml(r.content)}</div>
+            <div class="time">${r.reporterNickname ? escapeHtml(r.reporterNickname) : "游客"} · ${fmtTime(r.createdAt)}</div>
+          </div>
+          ${actions}
+        </div>`;
+      })
+      .join("");
+    $("reportList").querySelectorAll(".actions button").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          await fetch(`${API}/api/admin/reports/${btn.dataset.id}/resolve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+            body: JSON.stringify({ status: Number(btn.dataset.s) }),
+          });
+          loadReports(reportFilter);
+        } catch (e) {
+          console.error(e);
+          btn.disabled = false;
+        }
+      });
+    });
+  }
+  $("reportTabs").addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    document.querySelectorAll("#reportTabs button").forEach((b) => b.classList.remove("on"));
+    btn.classList.add("on");
+    reportFilter = btn.dataset.s;
+    loadReports(reportFilter);
+  });
+
+  /* ---------- 启动 ---------- */
+  if (token) {
+    loadAll(); // 401 会自动回到令牌门
+  } else {
+    showGate();
+  }
+})();
+</script>
+</body>
+</html>

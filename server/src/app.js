@@ -40,6 +40,9 @@ app.get("/", (req, res) => {
       "POST /api/stories/:id/report  提交内容纠错（游客可提交，5-500字）",
       "GET /api/admin/reports        纠错列表（需 ADMIN_TOKEN，?status=0/1/2）",
       "POST /api/admin/reports/:id/resolve  处理纠错（需 ADMIN_TOKEN）",
+      "GET /api/admin/stats/overview  统计看板总览（需 ADMIN_TOKEN）",
+      "GET /api/admin/stats/trend     近N日趋势（?days=7，需 ADMIN_TOKEN）",
+      "GET /api/admin/stats/stories   故事热度榜（?limit=20，需 ADMIN_TOKEN）",
       "GET /api/geo/ip              IP→城市（定位权限被拒时的兜底）",
     ],
   });
@@ -53,6 +56,8 @@ const auth = require("./routes/auth");
 app.use("/api/auth", auth);
 app.get("/api/me", auth.me);
 app.use("/api/sync", require("./routes/sync"));
+// 注意：/api/admin/stats 必须挂载在 /api/admin 之前（Express 按挂载顺序做前缀匹配）
+app.use("/api/admin/stats", require("./routes/admin-stats"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/geo", require("./routes/geo"));
 

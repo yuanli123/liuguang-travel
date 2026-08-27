@@ -107,6 +107,9 @@ curl http://localhost:3000/api/cities
 | `POST /api/stories/:id/report` | 提交内容纠错（游客可提交，5-500 字） |
 | `GET /api/admin/reports` | 纠错列表，最新在前（需 `ADMIN_TOKEN`，可选 `?status=0/1/2`） |
 | `POST /api/admin/reports/:id/resolve` | 处理纠错 `{status:1已采纳|2已驳回}`（需 `ADMIN_TOKEN`） |
+| `GET /api/admin/stats/overview` | 统计总览：用户/故事/播放/完播率/收藏/行程/纠错（需 `ADMIN_TOKEN`） |
+| `GET /api/admin/stats/trend` | 近 N 日趋势 `?days=7`（1-30，需 `ADMIN_TOKEN`） |
+| `GET /api/admin/stats/stories` | 故事热度榜 `?limit=20`（1-50，需 `ADMIN_TOKEN`） |
 | `GET /api/geo/ip` | IP → 城市（定位权限被拒时的兜底，第三方免费 IP 库，仅城市级） |
 
 错误统一返回中文 JSON：`{"error":"..."}`；未知接口返回 404 `{"error":"接口不存在"}`。
@@ -133,6 +136,19 @@ curl -X POST http://localhost:3000/api/admin/reports/1/resolve \
 ```
 
 > 已知限制：纠错提交暂无频率限制（游客可重复提交，属本阶段接受的 MVP 简化）；后台处理人字段（resolved_by）暂不记录。
+
+## 统计看板（阶段二 E2）
+
+浏览器打开 **http://localhost:8123/stats.html**（前端服务需已启动），输入 `.env` 里的 `ADMIN_TOKEN` 进入：
+
+- **总览卡片**：注册用户 / 上架故事 / 累计播放 / 完播率 / 收藏 / 加入行程 / 待处理纠错
+- **近 7 日趋势**：新增用户、播放、收藏、纠错按日聚合（纯 CSS 柱状图，无外部依赖）
+- **故事热度榜**：按累计播放排序，含收藏数、完播率、收听时长、加入行程、纠错数
+- **内容纠错处理**：页面上直接「采纳 / 驳回」
+
+数据口径：`play_history` 每 (用户, 故事) 仅记首次播放一条（云端同步时写入），完播率 = 完播用户 / 播过用户；趋势由各事件表的 `created_at/played_at` 按日聚合现算（`story_stats_daily` 预留表暂无聚合任务写入）。
+
+> 已知缺口：PRD 的「播放点击率」「连续播放率」需要前端曝光/连播埋点，本阶段未做；`story_stats_daily` 聚合任务待后续阶段。
 
 ## 前端定位（高德）
 

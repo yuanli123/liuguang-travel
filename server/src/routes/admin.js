@@ -7,27 +7,11 @@
  * 说明：resolved_by 保持 NULL——数据库尚无管理员角色概念，schema 也没有 resolved_at
  * 字段，CMS 阶段再补完整处理留痕。
  */
-const crypto = require("crypto");
 const express = require("express");
 const pool = require("../db");
-const config = require("../config");
-const { extractToken } = require("../middleware/auth");
+const { adminRequired } = require("../middleware/auth");
 
 const router = express.Router();
-
-function adminRequired(req, res, next) {
-  const token = extractToken(req);
-  if (!token || !config.adminToken) {
-    return res.status(401).json({ error: "未授权" });
-  }
-  const a = Buffer.from(String(token));
-  const b = Buffer.from(config.adminToken);
-  // timingSafeEqual 对长度不等的输入会抛异常，必须先比长度
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-    return res.status(401).json({ error: "未授权" });
-  }
-  next();
-}
 
 router.use(adminRequired);
 
