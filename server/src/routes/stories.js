@@ -15,6 +15,7 @@ const BASE_COLUMNS = `
     s.duration_sec AS durationSec,
     s.play_count AS playCount,
     s.cover_url AS cover,
+    s.audio_url AS audioUrl,
     (SELECT p.name FROM story_points sp
        JOIN points p ON p.id = sp.point_id
       WHERE sp.story_id = s.id ORDER BY sp.sort LIMIT 1) AS spot,
@@ -77,7 +78,7 @@ router.get("/:id", async (req, res) => {
   const byId = /^\d+$/.test(id);
   const where = `WHERE (${byId ? "s.id = ?" : "s.slug = ?"}) AND ${PUBLISHED}`;
   const [rows] = await pool.query(
-    `SELECT ${BASE_COLUMNS}, s.script, s.source_note AS sourceNote, s.audio_url AS audioUrl
+    `SELECT ${BASE_COLUMNS}, s.script, s.source_note AS sourceNote
      ${BASE_FROM} ${where}`,
     [byId ? Number(id) : id]
   );

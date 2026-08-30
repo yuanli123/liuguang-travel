@@ -16,6 +16,12 @@ module.exports = {
   jwtSecret: process.env.JWT_SECRET || "liuguang-dev-secret-change-me",
   nodeEnv: process.env.NODE_ENV || "development",
   adminToken: process.env.ADMIN_TOKEN || "",
+  // AI 故事工坊（DeepSeek，OpenAI 兼容接口）；未配置 key 时生成接口返回 503
+  ai: {
+    apiKey: process.env.DEEPSEEK_API_KEY || "",
+    apiBase: process.env.DEEPSEEK_API_BASE || "https://api.deepseek.com",
+    model: process.env.DEEPSEEK_MODEL || "deepseek-chat",
+  },
   corsOrigins: (process.env.CORS_ORIGIN || "http://localhost:8123,http://127.0.0.1:8123")
     .split(",")
     .map((s) => s.trim())

@@ -460,6 +460,7 @@ function mapRemoteStory(r, local) {
     durationSec: Number(r.durationSec) || 0,
     plays: formatPlays(r.playCount),
     cover: r.cover,
+    audioUrl: r.audioUrl ? API_BASE + r.audioUrl : null, // AI 配音音频（后端返回相对路径，补 API 源；无则走语音合成）
     mapPin: (local && local.mapPin) || projectMapPin(r.lat, r.lng),
     lat: r.lat,
     lng: r.lng,
@@ -614,6 +615,7 @@ function toast(msg) {
     "position:fixed;bottom:88px;left:50%;transform:translateX(-50%);" +
     "background:rgba(28,36,51,.92);color:#fff;padding:10px 16px;border-radius:999px;" +
     "font-size:13px;z-index:300;max-width:90%;text-align:center;" +
+    "pointer-events:none;" + // 纯提示不拦截点击（避免挡住底部按钮）
     "animation:toastIn .25s ease;";
   document.body.appendChild(t);
   setTimeout(() => {
@@ -1315,6 +1317,7 @@ const tts = {
   sentStartAt: 0,
   sentAccumMs: 0,
   _cur: null,
+  audio: null, // AI 配音故事的真实音频元素（null = 浏览器语音合成模式）
   CHARS_PER_SEC: 4.5, // 1x 语速下估算朗读速度（字/秒）
 };
 
@@ -1368,15 +1371,17 @@ function ttsElapsedChars() {
 }
 
 function ttsProgressSeconds() {
+  if (tts.audio) return Math.min(tts.audio.currentTime || 0, tts.audio.duration || Infinity);
   if (!tts.storyId || !tts.totalChars) return 0;
   return Math.min(ttsElapsedChars(), tts.totalChars) / tts.CHARS_PER_SEC;
 }
 
 function ttsTotalSeconds() {
+  if (tts.audio) return tts.audio.duration || tts.totalChars / tts.CHARS_PER_SEC;
   return tts.totalChars / tts.CHARS_PER_SEC;
 }
 
-function ttsSetup(id, script) {
+function ttsSetup(id, script, audioUrl) {
   stopTts();
   tts.storyId = id;
   tts.sentences = splitSentences(script);
@@ -1391,9 +1396,44 @@ function ttsSetup(id, script) {
   tts.paused = false;
   tts.finished = false;
   tts.sentAccumMs = 0;
+
+  // AI 配音故事：复用设计稿预留的 #audioEl（index.html 原有，不新增节点）
+  if (audioUrl) {
+    const el = $("audioEl");
+    el.preload = "auto";
+    el.src = audioUrl;
+    if (!el.dataset.bound) {
+      el.dataset.bound = "1"; // 事件只绑定一次，避免重复 openPlayer 叠加监听
+      el.addEventListener("play", updateTtsPlayBtn);
+      el.addEventListener("pause", updateTtsPlayBtn);
+      el.addEventListener("ended", () => ttsFinish());
+      el.addEventListener("error", onAudioError);
+    }
+    tts.audio = el;
+  }
+}
+
+/** 音频加载失败：回退浏览器语音合成，从原位置继续 */
+function onAudioError() {
+  const el = tts.audio;
+  if (!el || !tts.storyId) return;
+  const wasPlaying = !el.paused;
+  const sec = el.currentTime || 0;
+  el.pause();
+  el.removeAttribute("src");
+  el.load();
+  tts.audio = null;
+  if (tts.storyId !== state.currentPlayId) return;
+  ttsSeekTo(sec);
+  if (wasPlaying) ttsSpeakFrom(tts.idx);
+  else updateTtsPlayBtn();
 }
 
 function ttsSeekTo(sec) {
+  if (tts.audio) {
+    tts.audio.currentTime = Math.max(0, sec);
+    return;
+  }
   if (!tts.sentences.length) {
     tts.idx = 0;
     return;
@@ -1418,6 +1458,13 @@ function ttsSeekTo(sec) {
 }
 
 function ttsSpeakFrom(idx) {
+  if (tts.audio) {
+    // 真实音频模式：定位已在 ttsSeekTo 完成，这里直接开播
+    tts.finished = false;
+    tts.audio.play().catch(() => {});
+    updateTtsPlayBtn();
+    return;
+  }
   tts.idx = idx;
   tts.sentAccumMs = 0;
   tts.sentStartAt = performance.now();
@@ -1481,11 +1528,32 @@ function stopTts() {
   tts.finished = false;
   tts.paused = false;
   if ("speechSynthesis" in window) speechSynthesis.cancel();
+  if (tts.audio) {
+    tts.audio.pause();
+    tts.audio.removeAttribute("src");
+    tts.audio.load();
+    tts.audio = null;
+  }
   updateTtsPlayBtn();
 }
 
 function toggleTtsPlay() {
   if (!tts.storyId) return;
+  if (tts.audio) {
+    // 真实音频模式：播放/暂停/重听
+    const el = tts.audio;
+    if (el.ended) {
+      el.currentTime = 0;
+      el.play().catch(() => {});
+    } else if (el.paused) {
+      el.play().catch(() => {});
+    } else {
+      el.pause();
+      _saveCurrentProgress();
+    }
+    updateTtsPlayBtn();
+    return;
+  }
   if (tts.finished || tts.idx >= tts.sentences.length) {
     // 已听完：从头重听
     state.playbackCompleted[tts.storyId] = false;
@@ -1523,8 +1591,9 @@ function toggleTtsPlay() {
 function updateTtsPlayBtn() {
   const btn = document.querySelector(".btn-tts-play");
   if (!btn) return;
-  const playing =
-    tts.storyId && !tts.paused && !tts.finished && tts.idx < tts.sentences.length;
+  const playing = tts.audio
+    ? !tts.audio.paused && !tts.audio.ended
+    : tts.storyId && !tts.paused && !tts.finished && tts.idx < tts.sentences.length;
   btn.textContent = playing ? "⏸" : "▶";
 }
 
@@ -1551,8 +1620,8 @@ function openPlayer(id) {
   $("playerHook").textContent = s.hook;
   $("sourceNote").textContent = `信源说明：${s.source}`;
 
-  // 初始化 TTS
-  ttsSetup(id, s.script);
+  // 初始化 TTS（AI 配音故事走真实音频模式，否则浏览器语音合成）
+  ttsSetup(id, s.script, s.audioUrl);
 
   // 断点续播
   const savedProgress = state.playbackProgress[id] || 0;
@@ -1602,6 +1671,7 @@ async function refreshScript(s) {
     scriptCache[s.id] = {
       script: detail.script || s.script,
       source: detail.sourceNote || s.source,
+      audioUrl: detail.audioUrl ? API_BASE + detail.audioUrl : null,
     };
     applyScript(s, scriptCache[s.id]);
   } catch (_) {
@@ -1611,16 +1681,23 @@ async function refreshScript(s) {
   }
 }
 
-function applyScript(s, { script, source }) {
+function applyScript(s, { script, source, audioUrl }) {
   const changed = script && script !== s.script;
   s.script = script || s.script;
   s.source = source || s.source;
   const isCurrent = state.currentPlayId === s.id;
   if (isCurrent) {
     $("sourceNote").textContent = `信源说明：${s.source}`;
+    // AI 配音音频随详情到达：当前还没开读且非音频模式时热切换
+    if (audioUrl && !tts.audio && tts.idx === 0 && tts.sentAccumMs < 1000) {
+      s.audioUrl = audioUrl;
+      ttsSetup(s.id, s.script, audioUrl);
+      ttsSpeakFrom(tts.idx);
+      return;
+    }
   }
-  if (changed && isCurrent && tts.idx === 0 && tts.sentAccumMs < 1000) {
-    ttsSetup(s.id, script); // 尚未真正开读：热替换正文
+  if (changed && isCurrent && !tts.audio && tts.idx === 0 && tts.sentAccumMs < 1000) {
+    ttsSetup(s.id, script); // 尚未真正开读：热替换正文（音频模式不参与）
   }
 }
 
@@ -1671,6 +1748,10 @@ function bindSpeedButtons() {
         .forEach((x) => x.classList.remove("active"));
       b.classList.add("active");
       tts.rate = sp;
+      if (tts.audio) {
+        tts.audio.playbackRate = sp; // 真实音频直接调速
+        return;
+      }
       // 正在朗读时，从当前句重新开始以应用新语速
       if (
         tts.storyId &&
@@ -1692,8 +1773,15 @@ function bindSpeedButtons() {
 function bindAudioUi() {
   const seek = $("seekBar");
 
-  // 拖动进度条（松开时定位到对应句子）
+  // 拖动进度条（松开时定位到对应句子 / 真实音频时间点）
   seek.addEventListener("change", () => {
+    if (tts.audio) {
+      const el = tts.audio;
+      if (!el.duration) return;
+      el.currentTime = (Number(seek.value) / 100) * el.duration;
+      updateTtsPlayBtn();
+      return;
+    }
     if (!tts.storyId || !tts.totalChars) return;
     const sec = (Number(seek.value) / 100) * ttsTotalSeconds();
     ttsSeekTo(sec);
@@ -1710,6 +1798,14 @@ function bindAudioUi() {
   // 播放进度刷新 + 浏览器长语音中断兜底
   setInterval(() => {
     if (!tts.storyId || $("playerOverlay").classList.contains("hidden")) return;
+    if (tts.audio) {
+      const el = tts.audio;
+      if (el.duration && document.activeElement !== seek) {
+        seek.value = String(Math.min(100, (el.currentTime / el.duration) * 100));
+      }
+      $("timeRemaining").textContent = `剩余 ${formatRemain((el.duration || 0) - (el.currentTime || 0))}`;
+      return;
+    }
     const total = ttsTotalSeconds();
     const played = ttsProgressSeconds();
     if (total > 0 && document.activeElement !== seek) {
@@ -2052,10 +2148,15 @@ function bindMeTabs() {
 function showPrivacyNotice() {
   // 仅在首次且未跳过登录时展示
   if (state.loginDismissed) return;
-  // 隐私说明以轻量 toast 展示
-  setTimeout(() => {
+  // 隐私说明以轻量 toast 展示；若有其他 toast 正在展示则推迟，避免覆盖用户反馈
+  const tryShow = () => {
+    if (document.querySelector(".toast-msg")) {
+      setTimeout(tryShow, 800);
+      return;
+    }
     toast("🔒 位置信息仅用于匹配附近故事，不会上传服务器（演示）");
-  }, 2000);
+  };
+  setTimeout(tryShow, 2000);
 }
 
 /* ================================================================

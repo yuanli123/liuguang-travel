@@ -4,6 +4,7 @@
  * 后续阶段新增路由（auth/sync/favorites 等）时，在下方加一行挂载即可。
  */
 const express = require("express");
+const path = require("path");
 const cors = require("cors");
 const config = require("./config");
 
@@ -43,6 +44,10 @@ app.get("/", (req, res) => {
       "GET /api/admin/stats/overview  统计看板总览（需 ADMIN_TOKEN）",
       "GET /api/admin/stats/trend     近N日趋势（?days=7，需 ADMIN_TOKEN）",
       "GET /api/admin/stats/stories   故事热度榜（?limit=20，需 ADMIN_TOKEN）",
+      "POST /api/admin/ai/generate    AI 生成故事脚本（DeepSeek，需 ADMIN_TOKEN）",
+      "POST /api/admin/ai/stories     保存 AI 故事为草稿/上架（需 ADMIN_TOKEN）",
+      "POST /api/admin/ai/tts         合成配音（edge-tts，需 ADMIN_TOKEN）",
+      "GET /api/admin/ai/list         AI 生成故事列表（需 ADMIN_TOKEN）",
       "GET /api/geo/ip              IP→城市（定位权限被拒时的兜底）",
     ],
   });
@@ -56,10 +61,13 @@ const auth = require("./routes/auth");
 app.use("/api/auth", auth);
 app.get("/api/me", auth.me);
 app.use("/api/sync", require("./routes/sync"));
-// 注意：/api/admin/stats 必须挂载在 /api/admin 之前（Express 按挂载顺序做前缀匹配）
+// 注意：/api/admin/stats、/api/admin/ai 必须挂载在 /api/admin 之前（Express 按挂载顺序做前缀匹配）
 app.use("/api/admin/stats", require("./routes/admin-stats"));
+app.use("/api/admin/ai", require("./routes/ai"));
 app.use("/api/admin", require("./routes/admin"));
 app.use("/api/geo", require("./routes/geo"));
+// AI 配音生成的音频文件（stories.audio_url 指向 /audio/xxx.mp3）
+app.use("/audio", express.static(path.join(__dirname, "..", "audio")));
 
 // 404 兜底（统一中文 JSON）
 app.use((req, res) => {

@@ -110,6 +110,10 @@ curl http://localhost:3000/api/cities
 | `GET /api/admin/stats/overview` | 统计总览：用户/故事/播放/完播率/收藏/行程/纠错（需 `ADMIN_TOKEN`） |
 | `GET /api/admin/stats/trend` | 近 N 日趋势 `?days=7`（1-30，需 `ADMIN_TOKEN`） |
 | `GET /api/admin/stats/stories` | 故事热度榜 `?limit=20`（1-50，需 `ADMIN_TOKEN`） |
+| `POST /api/admin/ai/generate` | AI 生成故事脚本（DeepSeek，需 `ADMIN_TOKEN` 且配置 key） |
+| `POST /api/admin/ai/stories` | 保存 AI 故事为草稿/上架（需 `ADMIN_TOKEN`） |
+| `POST /api/admin/ai/tts` | 合成配音（edge-tts，需 `ADMIN_TOKEN`） |
+| `GET /api/admin/ai/list` | AI 生成故事列表（需 `ADMIN_TOKEN`） |
 | `GET /api/geo/ip` | IP → 城市（定位权限被拒时的兜底，第三方免费 IP 库，仅城市级） |
 
 错误统一返回中文 JSON：`{"error":"..."}`；未知接口返回 404 `{"error":"接口不存在"}`。
@@ -149,6 +153,22 @@ curl -X POST http://localhost:3000/api/admin/reports/1/resolve \
 数据口径：`play_history` 每 (用户, 故事) 仅记首次播放一条（云端同步时写入），完播率 = 完播用户 / 播过用户；趋势由各事件表的 `created_at/played_at` 按日聚合现算（`story_stats_daily` 预留表暂无聚合任务写入）。
 
 > 已知缺口：PRD 的「播放点击率」「连续播放率」需要前端曝光/连播埋点，本阶段未做；`story_stats_daily` 聚合任务待后续阶段。
+
+## AI 故事工坊（阶段二 D 线）
+
+浏览器打开 **http://localhost:8123/stats.html** 的「AI 故事工坊」面板：输入主题/景点 → DeepSeek 生成故事脚本（标题/钩子/情绪标签/正文）→ 修改后存草稿或直接上架 → edge-tts 合成配音。上架后 App 立即可听（有配音的故事播放真实音频，无配音的回退浏览器语音合成）。
+
+前置配置（.env）：
+
+```
+DEEPSEEK_API_KEY=sk-你的key      # https://platform.deepseek.com 申请并充值
+DEEPSEEK_API_BASE=https://api.deepseek.com
+DEEPSEEK_MODEL=deepseek-chat
+```
+
+- 每次生成/配音在 `ai_tasks` 表留痕（done/failed），可追溯与重试
+- 配音由 edge-tts（微软免费音色 zh-CN-XiaoxiaoNeural）合成 MP3，存 `server/audio/`（已 gitignore），经 `GET /audio/xxx.mp3` 提供
+- 生成内容未做事实核查（信源说明会标注「AI 生成」），本阶段无内容风控——接口仅管理员可用
 
 ## 前端定位（高德）
 

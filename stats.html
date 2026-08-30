@@ -129,6 +129,41 @@
   .badge.p0 { background: rgba(201,133,0,.18); color: #c98500; }
   .badge.p1 { background: rgba(25,158,112,.18); color: #199e70; }
   .badge.p2 { background: rgba(217,89,38,.18); color: #d95926; }
+
+  /* AI 故事工坊 */
+  .ai-form input, .ai-form select, .ai-form textarea {
+    background: var(--bg); border: 1px solid var(--hairline); color: var(--ink);
+    border-radius: 8px; padding: 9px 12px; font-size: 13px; font-family: inherit;
+  }
+  .ai-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .ai-row input { flex: 1; min-width: 140px; }
+  .ai-form textarea { width: 100%; min-height: 70px; margin-bottom: 10px; resize: vertical; }
+  .script-ta { min-height: 180px; }
+  button.primary {
+    background: linear-gradient(120deg, #8b5cf6, #2ec4b6); border: none; color: #fff;
+    border-radius: 8px; padding: 9px 18px; font-size: 13px; font-weight: 600;
+    cursor: pointer; white-space: nowrap;
+  }
+  #aiGenErr { color: #e66767; font-size: 12px; min-height: 16px; margin-bottom: 8px; }
+  .ai-actions { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .ai-actions button {
+    background: transparent; color: var(--ink-2); border: 1px solid var(--hairline);
+    border-radius: 8px; padding: 8px 16px; font-size: 13px; cursor: pointer;
+  }
+  .ai-actions .ok-btn { background: rgba(139,92,246,.18); border-color: #8b5cf6; color: #fff; }
+  #aiSaveMsg { font-size: 12px; color: var(--ink-2); }
+  .ai-tts-row { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  #aiTtsMsg { font-size: 12px; color: var(--ink-2); }
+  #aiTtsMsg a { color: #3987e5; }
+  .sub-h { font-size: 13px; color: var(--ink-2); margin: 18px 0 10px; font-weight: 600; }
+  .ai-item { display: flex; gap: 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--hairline); font-size: 13px; }
+  .ai-item .t { flex: 1; min-width: 0; }
+  .ai-item .t b { font-weight: 600; }
+  .ai-item .t .meta { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+  .ai-item button {
+    background: transparent; border: 1px solid var(--hairline); color: var(--ink-2);
+    border-radius: 8px; padding: 4px 12px; font-size: 12px; cursor: pointer; flex-shrink: 0;
+  }
 </style>
 </head>
 <body>
@@ -163,6 +198,56 @@
       </tr></thead>
       <tbody id="storyBody"></tbody>
     </table>
+  </div>
+
+  <div class="panel">
+    <h2>AI 故事工坊<span class="hint">DeepSeek 生成故事脚本 + edge-tts 合成配音</span></h2>
+    <div class="ai-form">
+      <div class="ai-row">
+        <input id="aiTopic" placeholder="主题/景点（必填），如：黄山迎客松">
+        <select id="aiCity">
+          <option value="">城市（可选）</option>
+          <option>北京</option><option>上海</option><option>杭州</option><option>苏州</option>
+          <option>成都</option><option>西安</option><option>南京</option><option>厦门</option>
+        </select>
+        <select id="aiStyle">
+          <option>治愈</option><option>悬疑</option><option>史诗</option><option>纪实</option>
+        </select>
+        <button id="aiGenBtn" class="primary">✨ 生成故事</button>
+      </div>
+      <textarea id="aiMaterial" placeholder="补充素材（选填）：史实、传说、你的想法…"></textarea>
+      <div id="aiGenErr"></div>
+    </div>
+    <div id="aiResult" hidden>
+      <div class="ai-row">
+        <input id="aiTitle" placeholder="标题">
+        <input id="aiHook" placeholder="钩子文案（40 字内）">
+      </div>
+      <div class="ai-row">
+        <input id="aiTags" placeholder="情绪标签，逗号分隔，如：震撼,温暖">
+        <select id="aiCat">
+          <option>历史</option><option>传说</option><option>地质</option><option>人文</option>
+        </select>
+        <select id="aiCity2">
+          <option value="其他">其他城市</option>
+          <option>北京</option><option>上海</option><option>杭州</option><option>苏州</option>
+          <option>成都</option><option>西安</option><option>南京</option><option>厦门</option>
+        </select>
+        <input id="aiSlug" placeholder="slug（英文标识）">
+      </div>
+      <textarea id="aiScript" class="script-ta" placeholder="故事正文"></textarea>
+      <div class="ai-actions">
+        <button id="aiSaveDraft">存草稿</button>
+        <button id="aiPublish" class="ok-btn">🚀 直接上架</button>
+        <span id="aiSaveMsg"></span>
+      </div>
+      <div class="ai-tts-row" id="aiTtsRow" hidden>
+        <button id="aiTtsBtn" class="primary">🔊 合成配音</button>
+        <span id="aiTtsMsg"></span>
+      </div>
+    </div>
+    <h3 class="sub-h">最近生成</h3>
+    <div id="aiList"></div>
   </div>
 
   <div class="panel">
@@ -201,6 +286,27 @@
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.error || "请求失败");
+    }
+    return res.json();
+  }
+  async function apiPost(path, body) {
+    const res = await fetch(API + path, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: "Bearer " + token } : {}),
+      },
+      body: JSON.stringify(body || {}),
+    });
+    if (res.status === 401) {
+      token = "";
+      localStorage.removeItem(TOKEN_KEY);
+      showGate("令牌无效或已过期，请重新输入");
+      throw new Error("unauthorized");
+    }
+    if (!res.ok) {
+      const b = await res.json().catch(() => ({}));
+      throw new Error(b.error || "请求失败");
     }
     return res.json();
   }
@@ -254,6 +360,7 @@
       api("/api/admin/stats/trend?days=7").then(renderTrend).catch((e) => fail("trend", e)),
       api("/api/admin/stats/stories?limit=20").then(renderStories).catch((e) => fail("stories", e)),
       loadReports("").catch((e) => fail("reports", e)),
+      loadAiList().catch((e) => fail("aiList", e)),
     ]);
     if (!token) return; // 401 时 api() 已清令牌并回到令牌门，不再展示看板
     $("tokenGate").hidden = true;
@@ -410,6 +517,137 @@
     reportFilter = btn.dataset.s;
     loadReports(reportFilter);
   });
+
+  /* ---------- AI 故事工坊 ---------- */
+  let aiStory = null; // 当前生成/已保存的故事
+
+  function fillAiEditor(s) {
+    $("aiTitle").value = s.title || "";
+    $("aiHook").value = s.hook || "";
+    $("aiTags").value = (s.emotionTags || []).join(",");
+    $("aiCat").value = s.category || "人文";
+    $("aiCity2").value = s.city || "其他";
+    $("aiSlug").value = s.slug || "";
+    $("aiScript").value = s.script || "";
+    $("aiResult").hidden = false;
+  }
+
+  function readAiEditor() {
+    return {
+      slug: $("aiSlug").value.trim(),
+      title: $("aiTitle").value.trim(),
+      hook: $("aiHook").value.trim(),
+      emotionTags: $("aiTags").value.split(/[,，]/).map((t) => t.trim()).filter(Boolean),
+      category: $("aiCat").value,
+      city: $("aiCity2").value,
+      script: $("aiScript").value.trim(),
+      sourceNote: aiStory && aiStory.sourceNote ? aiStory.sourceNote : "",
+    };
+  }
+
+  $("aiGenBtn").addEventListener("click", async () => {
+    const topic = $("aiTopic").value.trim();
+    if (!topic) {
+      $("aiGenErr").textContent = "请先填写主题/景点";
+      return;
+    }
+    $("aiGenErr").textContent = "";
+    $("aiGenBtn").disabled = true;
+    $("aiGenBtn").textContent = "生成中…";
+    try {
+      const d = await apiPost("/api/admin/ai/generate", {
+        topic,
+        city: $("aiCity").value,
+        style: $("aiStyle").value,
+        material: $("aiMaterial").value.trim(),
+      });
+      aiStory = d.story;
+      fillAiEditor(aiStory);
+      $("aiTtsRow").hidden = true;
+      $("aiSaveMsg").textContent = "已生成，可修改后保存";
+    } catch (e) {
+      $("aiGenErr").textContent = e.message;
+    } finally {
+      $("aiGenBtn").disabled = false;
+      $("aiGenBtn").textContent = "✨ 生成故事";
+    }
+  });
+
+  async function saveAiStory(publish) {
+    const story = readAiEditor();
+    if (!story.title || story.script.length < 100) {
+      $("aiSaveMsg").textContent = "标题与正文（至少 100 字）不能为空";
+      return;
+    }
+    try {
+      const r = await apiPost("/api/admin/ai/stories", { story, publish });
+      aiStory = { ...story, id: r.storyId, slug: r.slug };
+      $("aiSlug").value = r.slug;
+      $("aiSaveMsg").textContent = publish
+        ? `✅ 已上架（slug: ${r.slug}），App 立即可听`
+        : `已存草稿（slug: ${r.slug}）`;
+      $("aiTtsRow").hidden = false;
+      $("aiTtsMsg").textContent = "";
+      loadAiList().catch(() => {});
+    } catch (e) {
+      $("aiSaveMsg").textContent = e.message;
+    }
+  }
+  $("aiSaveDraft").addEventListener("click", () => saveAiStory(false));
+  $("aiPublish").addEventListener("click", () => saveAiStory(true));
+
+  $("aiTtsBtn").addEventListener("click", async () => {
+    if (!aiStory || !aiStory.id) {
+      $("aiTtsMsg").textContent = "请先保存故事";
+      return;
+    }
+    $("aiTtsBtn").disabled = true;
+    $("aiTtsMsg").textContent = "合成中，约 10-30 秒…";
+    try {
+      const r = await apiPost("/api/admin/ai/tts", { storyId: aiStory.id });
+      $("aiTtsMsg").innerHTML = `✅ 配音完成，<a href="${r.audioUrl}" target="_blank">试听</a>（App 将自动使用此音频）`;
+      loadAiList().catch(() => {});
+    } catch (e) {
+      $("aiTtsMsg").textContent = e.message;
+    } finally {
+      $("aiTtsBtn").disabled = false;
+    }
+  });
+
+  async function loadAiList() {
+    const d = await api("/api/admin/ai/list");
+    const list = d.stories || [];
+    if (!list.length) {
+      $("aiList").innerHTML = `<div class="empty">还没有 AI 生成的故事</div>`;
+      return;
+    }
+    $("aiList").innerHTML = list
+      .map((s) => {
+        const statusBadge = s.status === 2 ? `<span class="badge p1">已上架</span>` : `<span class="badge p0">草稿</span>`;
+        const audioBadge = s.audioUrl ? `<span class="badge p1">配音✅</span>` : "";
+        return `<div class="ai-item">
+          <div class="t">
+            <b>${escapeHtml(s.title)}</b> · ${escapeHtml(s.city)} · ${escapeHtml(s.slug)}
+            <div class="meta">${statusBadge} ${audioBadge} ${fmtTime(s.createdAt)}</div>
+          </div>
+          ${s.audioUrl ? "" : `<button data-id="${s.id}" class="ai-tts-quick">🔊 配音</button>`}
+        </div>`;
+      })
+      .join("");
+    $("aiList").querySelectorAll(".ai-tts-quick").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "合成中…";
+        try {
+          await apiPost("/api/admin/ai/tts", { storyId: Number(btn.dataset.id) });
+          loadAiList().catch(() => {});
+        } catch (e) {
+          btn.textContent = "失败";
+          btn.disabled = false;
+        }
+      });
+    });
+  }
 
   /* ---------- 启动 ---------- */
   if (token) {

@@ -14,3 +14,6 @@ node_modules/
 
 # 环境变量（含数据库密码，禁止提交）
 .env
+
+# AI 配音生成的音频文件
+server/audio/
