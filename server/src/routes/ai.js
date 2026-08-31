@@ -64,6 +64,8 @@ function normalizeStory(s, fallbackTopic) {
     : ["治愈"];
   tags = tags.filter((t) => TAG_POOL.includes(t));
   if (!tags.length) tags = ["治愈"];
+  // 去掉已有的「AI 生成」前缀，避免面板二次保存时叠加
+  const noteBase = String(s.sourceNote || "").replace(/^AI 生成[；，,\s]*/, "");
   return {
     slug,
     title: title.slice(0, 128),
@@ -72,7 +74,10 @@ function normalizeStory(s, fallbackTopic) {
     category: CATEGORIES.includes(s.category) ? s.category : "人文",
     city: CITIES.includes(s.city) ? s.city : "其他",
     script,
-    sourceNote: ("AI 生成，未经事实核查" + (s.sourceNote ? "；" + String(s.sourceNote) : "")).slice(0, 500),
+    // 去掉已有的「AI 生成」前缀再统一添加，避免面板二次保存时前缀叠加
+    sourceNote: (
+      "AI 生成，未经事实核查" + (noteBase ? "；" + noteBase : "")
+    ).slice(0, 500),
     durationSec: Math.max(60, Math.round(script.length / 4.5)), // 与 App 端 CHARS_PER_SEC 同口径
   };
 }
