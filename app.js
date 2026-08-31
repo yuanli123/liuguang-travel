@@ -451,15 +451,18 @@ function mapRemoteStory(r, local) {
   return {
     id: r.slug,
     title: r.title,
-    spot: r.spot,
+    // AI 故事可能没有点位/主题关联（category 为空），兜底避免渲染 "null" 与搜索报错
+    spot: r.spot || r.city || "",
     city: r.city,
     mood: (Array.isArray(r.emotionTags) && r.emotionTags[0]) || "治愈",
-    category: r.category,
+    category: r.category || "人文",
     hook: r.hook,
     durationMin: Math.max(1, Math.round((Number(r.durationSec) || 0) / 60)),
     durationSec: Number(r.durationSec) || 0,
     plays: formatPlays(r.playCount),
-    cover: r.cover,
+    cover: r.cover
+      ? r.cover.startsWith("/") ? API_BASE + r.cover : r.cover
+      : null,
     audioUrl: r.audioUrl ? API_BASE + r.audioUrl : null, // AI 配音音频（后端返回相对路径，补 API 源；无则走语音合成）
     mapPin: (local && local.mapPin) || projectMapPin(r.lat, r.lng),
     lat: r.lat,
@@ -467,6 +470,11 @@ function mapRemoteStory(r, local) {
     script: (local && local.script) || "", // 详情接口到达后由 refreshScript 补齐
     source: (local && local.source) || "",
   };
+}
+
+/** 封面 CSS：无封面时用渐变兜底（AI 故事封面由后端生成 SVG，正常不缺） */
+function coverBg(s) {
+  return s.cover ? `url(${s.cover})` : "linear-gradient(135deg,#3b3b6d,#7c5cbf)";
 }
 
 async function loadStories() {
@@ -978,7 +986,7 @@ function selectMapStory(id) {
 
   const card = $("mapStoryCard");
   card.classList.remove("hidden");
-  $("mapCardCover").style.backgroundImage = `url(${s.cover})`;
+  $("mapCardCover").style.backgroundImage = coverBg(s);
   $("mapCardTitle").textContent = s.title;
   $("mapCardLoc").textContent = s.spot;
 
@@ -1067,14 +1075,11 @@ function storyMatchesFilter(s) {
   if (state.cityFilter !== "全部" && s.city !== state.cityFilter) return false;
   const q = ($("feedSearchInput")?.value || "").trim().toLowerCase();
   if (!q) return true;
-  return (
-    s.title.toLowerCase().includes(q) ||
-    s.spot.toLowerCase().includes(q) ||
-    s.hook.toLowerCase().includes(q) ||
-    s.city.toLowerCase().includes(q) ||
-    s.mood.toLowerCase().includes(q) ||
-    s.category.toLowerCase().includes(q)
-  );
+  // 字段可能为 null（AI 故事缺主题/点位），全部走 String 兜底，防止过滤抛异常导致搜索整体失效
+  const hay = [
+    s.title, s.spot, s.hook, s.city, s.mood, s.category,
+  ].map((v) => String(v || "").toLowerCase()).join(" ");
+  return hay.includes(q);
 }
 
 function renderFeed() {
@@ -1095,7 +1100,7 @@ function renderFeed() {
     const hasProgress = progress > 10 && !completed;
 
     card.innerHTML = `
-      <div class="card-img" style="background-image:url(${s.cover})">
+      <div class="card-img" style="background-image:${coverBg(s)}">
         <span class="story-badge">${s.category}</span>
         ${hasProgress ? '<span class="resume-badge" style="position:absolute;top:12px;left:12px;padding:4px 10px;border-radius:999px;background:rgba(46,196,182,.9);color:#fff;font-size:11px;font-weight:600;">⏯ 续播</span>' : ""}
         <p class="story-overlay-loc">${s.spot}</p>
@@ -1169,7 +1174,7 @@ function renderTripList() {
     const li = document.createElement("li");
     li.className = "trip-story-item";
     li.innerHTML = `
-      <div class="thumb" style="background-image:url(${s.cover})">
+      <div class="thumb" style="background-image:${coverBg(s)}">
         <span class="order">${i + 1}</span>
       </div>
       <div class="info">
@@ -1607,7 +1612,7 @@ function openPlayer(id) {
   overlay.classList.remove("hidden");
   overlay.setAttribute("aria-hidden", "false");
 
-  $("playerBg").style.backgroundImage = `url(${s.cover})`;
+  $("playerBg").style.backgroundImage = coverBg(s);
   $("playerMood").textContent = s.mood;
   $("playerTitle").textContent = s.title;
   // 有定位时显示真实距离（与地图卡模式一致）

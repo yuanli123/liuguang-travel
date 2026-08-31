@@ -17,3 +17,6 @@ node_modules/
 
 # AI 配音生成的音频文件
 server/audio/
+
+# AI 故事封面（本地合成 SVG，运行时生成）
+server/covers/

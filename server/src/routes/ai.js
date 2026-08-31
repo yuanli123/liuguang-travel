@@ -15,6 +15,7 @@ const pool = require("../db");
 const config = require("../config");
 const { adminRequired } = require("../middleware/auth");
 const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
+const { makeCover } = require("../lib/cover");
 
 const router = express.Router();
 router.use(adminRequired);
@@ -23,6 +24,8 @@ const CITIES = ["北京", "上海", "杭州", "苏州", "成都", "西安", "南
 const STYLES = ["治愈", "悬疑", "史诗", "纪实"];
 const CATEGORIES = ["历史", "传说", "地质", "人文"];
 const TAG_POOL = ["治愈", "震撼", "怀旧", "神秘", "温暖", "悲壮"];
+// 类别名 → topics 表 id（App 卡片徽章与搜索依赖 story_topics 关联）
+const TOPIC_IDS = { 传说: 1, 历史: 2, 人文: 3, 地质: 4 };
 
 // 城市 → 经纬度：新故事自动建点位，App 地图 pin 落在真实城市
 const CITY_COORDS = {
@@ -176,6 +179,23 @@ router.post("/stories", async (req, res) => {
   );
   const storyId = Number(r.insertId);
 
+  // 类型标签落库：category → story_topics（App 卡片徽章/搜索依赖该关联，缺失会导致前端报错）
+  const topicId = TOPIC_IDS[s.category] || TOPIC_IDS["人文"];
+  await pool.query("INSERT INTO story_topics (story_id, topic_id) VALUES (?, ?)", [
+    storyId,
+    topicId,
+  ]);
+
+  // 自动生成封面（本地 SVG 插画风；失败不阻断上架）
+  try {
+    const coverUrl = makeCover({
+      id: storyId, slug, title: s.title, city: s.city, category: s.category, hook: s.hook,
+    });
+    await pool.query("UPDATE stories SET cover_url = ? WHERE id = ?", [coverUrl, storyId]);
+  } catch (e) {
+    console.warn("封面生成失败（不影响上架）:", e.message);
+  }
+
   // 城市能对上坐标 → 自动建点位（App 地图 pin 与距离正常显示）
   const coords = CITY_COORDS[s.city];
   if (coords) {
@@ -189,6 +209,34 @@ router.post("/stories", async (req, res) => {
     ]);
   }
   res.json({ storyId, slug, status });
+});
+
+// POST /api/admin/ai/cover —— 为故事（重新）生成封面（新故事保存时已自动生成；此接口用于补历史故事）
+router.post("/cover", async (req, res) => {
+  const storyId = Number((req.body || {}).storyId);
+  if (!Number.isInteger(storyId) || storyId <= 0) {
+    return res.status(400).json({ error: "storyId 不正确" });
+  }
+  const [rows] = await pool.query(
+    `SELECT s.id, s.slug, s.title, s.hook, s.city,
+            (SELECT t.name FROM story_topics st
+               JOIN topics t ON t.id = st.topic_id
+              WHERE st.story_id = s.id ORDER BY st.topic_id LIMIT 1) AS category
+       FROM stories s WHERE s.id = ?`,
+    [storyId]
+  );
+  if (!rows.length) return res.status(404).json({ error: "故事不存在" });
+  const story = rows[0];
+  try {
+    const coverUrl = makeCover({
+      id: story.id, slug: story.slug, title: story.title,
+      city: story.city, category: story.category || "人文", hook: story.hook,
+    });
+    await pool.query("UPDATE stories SET cover_url = ? WHERE id = ?", [coverUrl, story.id]);
+    res.json({ ok: true, coverUrl });
+  } catch (e) {
+    res.status(502).json({ error: "封面生成失败：" + e.message });
+  }
 });
 
 // POST /api/admin/ai/tts
@@ -225,7 +273,7 @@ router.post("/tts", async (req, res) => {
 // GET /api/admin/ai/list
 router.get("/list", async (req, res) => {
   const [rows] = await pool.query(
-    `SELECT id, slug, title, city, status, audio_url AS audioUrl, created_at AS createdAt
+    `SELECT id, slug, title, city, status, audio_url AS audioUrl, cover_url AS coverUrl, created_at AS createdAt
        FROM stories
       WHERE source_note LIKE 'AI 生成%'
       ORDER BY id DESC

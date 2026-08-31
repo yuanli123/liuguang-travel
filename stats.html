@@ -625,12 +625,14 @@
       .map((s) => {
         const statusBadge = s.status === 2 ? `<span class="badge p1">已上架</span>` : `<span class="badge p0">草稿</span>`;
         const audioBadge = s.audioUrl ? `<span class="badge p1">配音✅</span>` : "";
+        const coverBadge = s.coverUrl ? `<span class="badge p1">封面✅</span>` : "";
         return `<div class="ai-item">
           <div class="t">
             <b>${escapeHtml(s.title)}</b> · ${escapeHtml(s.city)} · ${escapeHtml(s.slug)}
-            <div class="meta">${statusBadge} ${audioBadge} ${fmtTime(s.createdAt)}</div>
+            <div class="meta">${statusBadge} ${audioBadge} ${coverBadge} ${fmtTime(s.createdAt)}</div>
           </div>
           ${s.audioUrl ? "" : `<button data-id="${s.id}" class="ai-tts-quick">🔊 配音</button>`}
+          ${s.coverUrl ? "" : `<button data-id="${s.id}" class="ai-cover-quick">🎨 封面</button>`}
         </div>`;
       })
       .join("");
@@ -640,6 +642,19 @@
         btn.textContent = "合成中…";
         try {
           await apiPost("/api/admin/ai/tts", { storyId: Number(btn.dataset.id) });
+          loadAiList().catch(() => {});
+        } catch (e) {
+          btn.textContent = "失败";
+          btn.disabled = false;
+        }
+      });
+    });
+    $("aiList").querySelectorAll(".ai-cover-quick").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "生成中…";
+        try {
+          await apiPost("/api/admin/ai/cover", { storyId: Number(btn.dataset.id) });
           loadAiList().catch(() => {});
         } catch (e) {
           btn.textContent = "失败";

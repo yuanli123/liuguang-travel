@@ -47,6 +47,7 @@ app.get("/", (req, res) => {
       "POST /api/admin/ai/generate    AI 生成故事脚本（DeepSeek，需 ADMIN_TOKEN）",
       "POST /api/admin/ai/stories     保存 AI 故事为草稿/上架（需 ADMIN_TOKEN）",
       "POST /api/admin/ai/tts         合成配音（edge-tts，需 ADMIN_TOKEN）",
+      "POST /api/admin/ai/cover       生成/重生成故事封面（本地 SVG，需 ADMIN_TOKEN）",
       "GET /api/admin/ai/list         AI 生成故事列表（需 ADMIN_TOKEN）",
       "GET /api/geo/ip              IP→城市（定位权限被拒时的兜底）",
     ],
@@ -68,6 +69,8 @@ app.use("/api/admin", require("./routes/admin"));
 app.use("/api/geo", require("./routes/geo"));
 // AI 配音生成的音频文件（stories.audio_url 指向 /audio/xxx.mp3）
 app.use("/audio", express.static(path.join(__dirname, "..", "audio")));
+// AI 故事封面（本地合成 SVG，stories.cover_url 指向 /covers/xxx.svg）
+app.use("/covers", express.static(path.join(__dirname, "..", "covers")));
 
 // 404 兜底（统一中文 JSON）
 app.use((req, res) => {
