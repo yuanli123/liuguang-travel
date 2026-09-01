@@ -16,6 +16,7 @@ const config = require("../config");
 const { adminRequired } = require("../middleware/auth");
 const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
 const { makeCover } = require("../lib/cover");
+const { voiceForTags, sanitizeVoice } = require("../lib/voice");
 
 const router = express.Router();
 router.use(adminRequired);
@@ -239,17 +240,20 @@ router.post("/cover", async (req, res) => {
   }
 });
 
-// POST /api/admin/ai/tts
+// POST /api/admin/ai/tts —— { storyId, voice? }；未指定音色时按故事心情标签自动匹配（lib/voice.js）
 router.post("/tts", async (req, res) => {
   const storyId = Number((req.body || {}).storyId);
   if (!Number.isInteger(storyId) || storyId <= 0) {
     return res.status(400).json({ error: "storyId 不正确" });
   }
-  const [[story]] = await pool.query("SELECT id, script FROM stories WHERE id = ?", [storyId]);
+  const [[story]] = await pool.query("SELECT id, script, emotion_tags AS emotionTags FROM stories WHERE id = ?", [storyId]);
   if (!story) return res.status(404).json({ error: "故事不存在" });
   if (!story.script || !story.script.trim()) {
     return res.status(400).json({ error: "故事没有正文，无法配音" });
   }
+  let tags = story.emotionTags;
+  if (typeof tags === "string") { try { tags = JSON.parse(tags); } catch (_) { tags = []; } }
+  const voice = sanitizeVoice((req.body || {}).voice || voiceForTags(tags));
 
   const audioRoot = path.join(__dirname, "..", "..", "audio");
   // toFile 在给定目录内写固定文件名 audio.mp3，故每个故事用独立子目录避免互相覆盖
@@ -257,16 +261,36 @@ router.post("/tts", async (req, res) => {
   fs.mkdirSync(outDir, { recursive: true });
   try {
     const tts = new MsEdgeTTS();
-    await tts.setMetadata("zh-CN-XiaoxiaoNeural", OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+    await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
     const { audioFilePath } = await tts.toFile(outDir, story.script);
     if (!audioFilePath) throw new Error("未生成音频文件");
     const url = "/audio/" + path.relative(audioRoot, audioFilePath).replace(/\\/g, "/");
     await pool.query("UPDATE stories SET audio_url = ? WHERE id = ?", [url, storyId]);
-    await logTask("tts", { storyId }, { audioUrl: url }, "done");
-    res.json({ ok: true, audioUrl: url });
+    await logTask("tts", { storyId, voice }, { audioUrl: url }, "done");
+    res.json({ ok: true, audioUrl: url, voice });
   } catch (e) {
-    await logTask("tts", { storyId }, null, "failed");
+    await logTask("tts", { storyId, voice }, null, "failed");
     res.status(502).json({ error: "语音合成失败：" + e.message });
+  }
+});
+
+// POST /api/admin/ai/tts-sample —— { voice } 合成一句试听音频（按音色缓存，秒回）
+router.post("/tts-sample", async (req, res) => {
+  const voice = sanitizeVoice((req.body || {}).voice);
+  const samplesDir = path.join(__dirname, "..", "..", "audio", "samples");
+  const sampleFile = path.join(samplesDir, voice + ".mp3");
+  try {
+    if (!fs.existsSync(sampleFile)) {
+      fs.mkdirSync(samplesDir, { recursive: true });
+      const tts = new MsEdgeTTS();
+      await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      await tts.toFile(samplesDir, "你好，我是流光幻旅的故事讲述人，用声音陪你走过这座城市的每一段时光。");
+      // toFile 写固定名 audio.mp3 → 重命名为音色名
+      fs.renameSync(path.join(samplesDir, "audio.mp3"), sampleFile);
+    }
+    res.json({ ok: true, sampleUrl: "/audio/samples/" + voice + ".mp3" });
+  } catch (e) {
+    res.status(502).json({ error: "试听合成失败：" + e.message });
   }
 });
 

@@ -242,6 +242,16 @@
         <span id="aiSaveMsg"></span>
       </div>
       <div class="ai-tts-row" id="aiTtsRow" hidden>
+        <select id="aiVoice" title="配音音色（留空=按情绪标签自动匹配）">
+          <option value="">🎙 自动匹配</option>
+          <option value="zh-CN-XiaoxiaoNeural">晓晓 · 女声温柔</option>
+          <option value="zh-CN-XiaoyiNeural">晓伊 · 女声活泼</option>
+          <option value="zh-CN-YunxiNeural">云希 · 男声磁性</option>
+          <option value="zh-CN-YunjianNeural">云健 · 男声浑厚</option>
+          <option value="zh-CN-YunyangNeural">云扬 · 男声播报</option>
+          <option value="zh-CN-YunxiaNeural">云夏 · 男声少年</option>
+        </select>
+        <button id="aiVoicePreview" title="试听所选音色">▶ 试听</button>
         <button id="aiTtsBtn" class="primary">🔊 合成配音</button>
         <span id="aiTtsMsg"></span>
       </div>
@@ -604,13 +614,35 @@
     $("aiTtsBtn").disabled = true;
     $("aiTtsMsg").textContent = "合成中，约 10-30 秒…";
     try {
-      const r = await apiPost("/api/admin/ai/tts", { storyId: aiStory.id });
+      const r = await apiPost("/api/admin/ai/tts", { storyId: aiStory.id, voice: $("aiVoice").value });
       $("aiTtsMsg").innerHTML = `✅ 配音完成，<a href="${r.audioUrl}" target="_blank">试听</a>（App 将自动使用此音频）`;
       loadAiList().catch(() => {});
     } catch (e) {
       $("aiTtsMsg").textContent = e.message;
     } finally {
       $("aiTtsBtn").disabled = false;
+    }
+  });
+
+  // 音色试听：下拉默认值按故事标签自动匹配提示
+  $("aiVoicePreview").addEventListener("click", async () => {
+    const voice = $("aiVoice").value;
+    if (!voice) {
+      $("aiTtsMsg").textContent = "「自动匹配」按故事的情绪标签选音色，先选具体音色再试听";
+      return;
+    }
+    $("aiVoicePreview").disabled = true;
+    $("aiVoicePreview").textContent = "合成中…";
+    try {
+      const r = await apiPost("/api/admin/ai/tts-sample", { voice });
+      const audio = new Audio(API + r.sampleUrl); // sampleUrl 是相对路径，需补 API 源
+      await audio.play();
+      $("aiVoicePreview").textContent = "▶ 试听";
+    } catch (e) {
+      $("aiTtsMsg").textContent = e.message;
+      $("aiVoicePreview").textContent = "▶ 试听";
+    } finally {
+      $("aiVoicePreview").disabled = false;
     }
   });
 
