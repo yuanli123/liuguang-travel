@@ -113,7 +113,9 @@ curl http://localhost:3000/api/cities
 | `POST /api/admin/ai/generate` | AI 生成故事脚本（DeepSeek，需 `ADMIN_TOKEN` 且配置 key） |
 | `POST /api/admin/ai/stories` | 保存 AI 故事为草稿/上架（需 `ADMIN_TOKEN`） |
 | `POST /api/admin/ai/tts` | 合成配音（edge-tts，需 `ADMIN_TOKEN`） |
-| `GET /api/admin/ai/list` | AI 生成故事列表（需 `ADMIN_TOKEN`） |
+| `GET /api/admin/ai/list` | AI 生成故事列表（含变体/配音计数，需 `ADMIN_TOKEN`） |
+| `POST /api/admin/ai/variants` | 为单篇补生成缺失讲述模式变体（需 `ADMIN_TOKEN`） |
+| `POST /api/admin/ai/variant-tts` | 按讲述模式合成配音 `{storyId, mode}`（需 `ADMIN_TOKEN`） |
 | `GET /api/geo/ip` | IP → 城市（定位权限被拒时的兜底，第三方免费 IP 库，仅城市级） |
 
 错误统一返回中文 JSON：`{"error":"..."}`；未知接口返回 404 `{"error":"接口不存在"}`。
@@ -169,6 +171,22 @@ DEEPSEEK_MODEL=deepseek-chat
 - 每次生成/配音在 `ai_tasks` 表留痕（done/failed），可追溯与重试
 - 配音由 edge-tts（微软免费音色 zh-CN-XiaoxiaoNeural）合成 MP3，存 `server/audio/`（已 gitignore），经 `GET /audio/xxx.mp3` 提供
 - 生成内容未做事实核查（信源说明会标注「AI 生成」），本阶段无内容风控——接口仅管理员可用
+
+## 讲述模式（4 模式变体）
+
+每篇故事可有 4 种讲述模式，听众在播放页随时切换（`GET /api/stories/:id` 返回 `variants` 数组）：
+
+| mode | 名称 | 音色 | 语速 |
+|---|---|---|---|
+| `chat` | 日常聊天（默认） | 晓伊（活泼轻快） | +8% |
+| `story` | 娓娓道来 | 晓晓（温柔亲切） | — |
+| `suspense` | 悬念夜谈 | 云希（磁性低沉） | — |
+| `pingshu` | 说书人 | 云健（浑厚有力） | — |
+
+- 模式目录与提示词在 `src/lib/modes.js`，生成管线（两阶段防事实漂移）在 `src/lib/ai-generate.js`
+- 存量库升级：`npm run db:migrate-variants`（幂等：建表 + 补列 + 存量故事写入 story 变体）
+- 存量故事补全其余 3 个模式：`npm run backfill-variants -- --dry-run` 预演后全量跑（需 DeepSeek key）
+- 老接口 `POST /api/admin/ai/tts` 保留（无变体的旧数据兜底），新配音统一走 `variant-tts`
 
 ## 前端定位（高德）
 

@@ -9,6 +9,8 @@
   },
   "scripts": {
     "db:init": "node db/init.js",
+    "db:migrate-variants": "node db/migrate-variants.js",
+    "backfill-variants": "node scripts/backfill-variants.js",
     "seed": "node db/seed.js",
     "extract-stories": "node db/extract-stories.js",
     "start": "node src/index.js",

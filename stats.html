@@ -27,6 +27,13 @@
     font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
     min-height: 100vh;
   }
+  .toast {
+    position: fixed; right: 20px; bottom: 20px; z-index: 99;
+    background: rgba(0,0,0,.82); color: #fff; border-radius: 10px;
+    padding: 10px 16px; font-size: 14px; max-width: 320px;
+    pointer-events: none; animation: toast-in .25s ease;
+  }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
   .topbar {
     padding: 18px 24px;
     background: linear-gradient(120deg, #8b5cf6 0%, #2ec4b6 100%);
@@ -201,7 +208,7 @@
   </div>
 
   <div class="panel">
-    <h2>AI 故事工坊<span class="hint">DeepSeek 生成故事脚本 + edge-tts 合成配音</span></h2>
+    <h2>AI 故事工坊<span class="hint">DeepSeek 生成 4 种讲述模式脚本 + edge-tts 按模式合成配音</span></h2>
     <div class="ai-form">
       <div class="ai-row">
         <input id="aiTopic" placeholder="主题/景点（必填），如：黄山迎客松">
@@ -210,10 +217,7 @@
           <option>北京</option><option>上海</option><option>杭州</option><option>苏州</option>
           <option>成都</option><option>西安</option><option>南京</option><option>厦门</option>
         </select>
-        <select id="aiStyle">
-          <option>治愈</option><option>悬疑</option><option>史诗</option><option>纪实</option>
-        </select>
-        <button id="aiGenBtn" class="primary">✨ 生成故事</button>
+        <button id="aiGenBtn" class="primary">✨ 生成故事（4 种讲述模式）</button>
       </div>
       <textarea id="aiMaterial" placeholder="补充素材（选填）：史实、传说、你的想法…"></textarea>
       <div id="aiGenErr"></div>
@@ -235,24 +239,16 @@
         </select>
         <input id="aiSlug" placeholder="slug（英文标识）">
       </div>
+      <div class="tabs" id="aiModeTabs" title="切换讲述模式，分别修改各模式脚本"></div>
       <textarea id="aiScript" class="script-ta" placeholder="故事正文"></textarea>
+      <div id="aiVariantMsg"></div>
       <div class="ai-actions">
         <button id="aiSaveDraft">存草稿</button>
         <button id="aiPublish" class="ok-btn">🚀 直接上架</button>
         <span id="aiSaveMsg"></span>
       </div>
       <div class="ai-tts-row" id="aiTtsRow" hidden>
-        <select id="aiVoice" title="配音音色（留空=按情绪标签自动匹配）">
-          <option value="">🎙 自动匹配</option>
-          <option value="zh-CN-XiaoxiaoNeural">晓晓 · 女声温柔</option>
-          <option value="zh-CN-XiaoyiNeural">晓伊 · 女声活泼</option>
-          <option value="zh-CN-YunxiNeural">云希 · 男声磁性</option>
-          <option value="zh-CN-YunjianNeural">云健 · 男声浑厚</option>
-          <option value="zh-CN-YunyangNeural">云扬 · 男声播报</option>
-          <option value="zh-CN-YunxiaNeural">云夏 · 男声少年</option>
-        </select>
-        <button id="aiVoicePreview" title="试听所选音色">▶ 试听</button>
-        <button id="aiTtsBtn" class="primary">🔊 合成配音</button>
+        <button id="aiTtsBtn" class="primary">🔊 为当前模式合成配音</button>
         <span id="aiTtsMsg"></span>
       </div>
     </div>
@@ -299,6 +295,15 @@
     }
     return res.json();
   }
+  // 轻提示：复用 App 同款样式思路（右下角浮层，2.5 秒后消失，不拦截点击）
+  function toast(msg) {
+    const el = document.createElement("div");
+    el.className = "toast";
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 2500);
+  }
+
   async function apiPost(path, body) {
     const res = await fetch(API + path, {
       method: "POST",
@@ -529,7 +534,56 @@
   });
 
   /* ---------- AI 故事工坊 ---------- */
-  let aiStory = null; // 当前生成/已保存的故事
+  let aiStory = null; // 当前故事的元数据 + chat 脚本（保存后含 id/slug）
+  let aiVariants = {}; // mode -> { script, error }（非 chat 模式）
+  let aiAudioOk = {}; // mode -> true（本地记录已合成配音）
+  let aiActiveMode = "chat";
+  const AI_MODES = [
+    { key: "chat", label: "日常聊天" },
+    { key: "story", label: "娓娓道来" },
+    { key: "suspense", label: "悬念夜谈" },
+    { key: "pingshu", label: "说书人" },
+  ];
+  const AI_MODE_LABEL = Object.fromEntries(AI_MODES.map((m) => [m.key, m.label]));
+
+  function currentScript() {
+    if (aiActiveMode === "chat") return aiStory ? aiStory.script : "";
+    const v = aiVariants[aiActiveMode];
+    return v ? v.script : "";
+  }
+
+  function saveActiveScript() {
+    if (!aiStory) return;
+    const val = $("aiScript").value;
+    if (aiActiveMode === "chat") aiStory.script = val;
+    else if (aiVariants[aiActiveMode]) aiVariants[aiActiveMode].script = val;
+  }
+
+  function loadActiveScript() {
+    $("aiScript").value = currentScript();
+    const v = aiActiveMode !== "chat" ? aiVariants[aiActiveMode] : null;
+    $("aiVariantMsg").textContent =
+      v && v.error ? `⚠️ 该模式生成失败：${v.error}（保存后可点「补变体」重试）` : "";
+  }
+
+  function renderModeTabs() {
+    $("aiModeTabs").innerHTML = AI_MODES.map((m) => {
+      let mark = "";
+      if (m.key === "chat") mark = aiStory ? "✓" : "";
+      else if (aiVariants[m.key]) mark = aiVariants[m.key].error ? "✗" : "✓";
+      if (aiAudioOk[m.key]) mark += "♪";
+      const cls = m.key === aiActiveMode ? "on" : "";
+      return `<button data-mode="${m.key}" class="${cls}">${m.label}${mark}</button>`;
+    }).join("");
+  }
+  $("aiModeTabs").addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    saveActiveScript();
+    aiActiveMode = btn.dataset.mode;
+    renderModeTabs();
+    loadActiveScript();
+  });
 
   function fillAiEditor(s) {
     $("aiTitle").value = s.title || "";
@@ -538,11 +592,12 @@
     $("aiCat").value = s.category || "人文";
     $("aiCity2").value = s.city || "其他";
     $("aiSlug").value = s.slug || "";
-    $("aiScript").value = s.script || "";
     $("aiResult").hidden = false;
+    loadActiveScript();
   }
 
   function readAiEditor() {
+    saveActiveScript();
     return {
       slug: $("aiSlug").value.trim(),
       title: $("aiTitle").value.trim(),
@@ -550,9 +605,17 @@
       emotionTags: $("aiTags").value.split(/[,，]/).map((t) => t.trim()).filter(Boolean),
       category: $("aiCat").value,
       city: $("aiCity2").value,
-      script: $("aiScript").value.trim(),
+      script: aiStory ? aiStory.script : $("aiScript").value.trim(),
       sourceNote: aiStory && aiStory.sourceNote ? aiStory.sourceNote : "",
     };
+  }
+
+  function readVariants() {
+    return AI_MODES
+      .filter(
+        (m) => m.key !== "chat" && aiVariants[m.key] && (aiVariants[m.key].script || "").trim().length >= 100
+      )
+      .map((m) => ({ mode: m.key, script: aiVariants[m.key].script.trim() }));
   }
 
   $("aiGenBtn").addEventListener("click", async () => {
@@ -563,23 +626,29 @@
     }
     $("aiGenErr").textContent = "";
     $("aiGenBtn").disabled = true;
-    $("aiGenBtn").textContent = "生成中…";
+    $("aiGenBtn").textContent = "生成中（4 种模式，约 1-2 分钟）…";
     try {
       const d = await apiPost("/api/admin/ai/generate", {
         topic,
         city: $("aiCity").value,
-        style: $("aiStyle").value,
         material: $("aiMaterial").value.trim(),
       });
       aiStory = d.story;
+      aiVariants = {};
+      aiAudioOk = {};
+      for (const v of d.variants || []) {
+        if (v.mode !== "chat") aiVariants[v.mode] = { script: v.script || "", error: v.error };
+      }
+      aiActiveMode = "chat";
       fillAiEditor(aiStory);
+      renderModeTabs();
       $("aiTtsRow").hidden = true;
-      $("aiSaveMsg").textContent = "已生成，可修改后保存";
+      $("aiSaveMsg").textContent = "已生成 4 种讲述模式，可切换标签页修改后保存";
     } catch (e) {
       $("aiGenErr").textContent = e.message;
     } finally {
       $("aiGenBtn").disabled = false;
-      $("aiGenBtn").textContent = "✨ 生成故事";
+      $("aiGenBtn").textContent = "✨ 生成故事（4 种讲述模式）";
     }
   });
 
@@ -590,12 +659,12 @@
       return;
     }
     try {
-      const r = await apiPost("/api/admin/ai/stories", { story, publish });
+      const r = await apiPost("/api/admin/ai/stories", { story, publish, variants: readVariants() });
       aiStory = { ...story, id: r.storyId, slug: r.slug };
       $("aiSlug").value = r.slug;
       $("aiSaveMsg").textContent = publish
-        ? `✅ 已上架（slug: ${r.slug}），App 立即可听`
-        : `已存草稿（slug: ${r.slug}）`;
+        ? `✅ 已上架（slug: ${r.slug}，变体 ${r.variantCount}/4），App 立即可听`
+        : `已存草稿（slug: ${r.slug}，变体 ${r.variantCount}/4）`;
       $("aiTtsRow").hidden = false;
       $("aiTtsMsg").textContent = "";
       loadAiList().catch(() => {});
@@ -606,43 +675,25 @@
   $("aiSaveDraft").addEventListener("click", () => saveAiStory(false));
   $("aiPublish").addEventListener("click", () => saveAiStory(true));
 
+  // 配音：对当前标签页所在模式合成（音色/语速由服务端按模式固定）
   $("aiTtsBtn").addEventListener("click", async () => {
     if (!aiStory || !aiStory.id) {
       $("aiTtsMsg").textContent = "请先保存故事";
       return;
     }
+    const mode = aiActiveMode;
     $("aiTtsBtn").disabled = true;
-    $("aiTtsMsg").textContent = "合成中，约 10-30 秒…";
+    $("aiTtsMsg").textContent = `合成「${AI_MODE_LABEL[mode]}」配音中，约 10-30 秒…`;
     try {
-      const r = await apiPost("/api/admin/ai/tts", { storyId: aiStory.id, voice: $("aiVoice").value });
-      $("aiTtsMsg").innerHTML = `✅ 配音完成，<a href="${r.audioUrl}" target="_blank">试听</a>（App 将自动使用此音频）`;
+      const r = await apiPost("/api/admin/ai/variant-tts", { storyId: aiStory.id, mode });
+      aiAudioOk[mode] = true;
+      $("aiTtsMsg").innerHTML = `✅ 「${AI_MODE_LABEL[mode]}」配音完成，<a href="${r.audioUrl}" target="_blank">试听</a>`;
+      renderModeTabs();
       loadAiList().catch(() => {});
     } catch (e) {
       $("aiTtsMsg").textContent = e.message;
     } finally {
       $("aiTtsBtn").disabled = false;
-    }
-  });
-
-  // 音色试听：下拉默认值按故事标签自动匹配提示
-  $("aiVoicePreview").addEventListener("click", async () => {
-    const voice = $("aiVoice").value;
-    if (!voice) {
-      $("aiTtsMsg").textContent = "「自动匹配」按故事的情绪标签选音色，先选具体音色再试听";
-      return;
-    }
-    $("aiVoicePreview").disabled = true;
-    $("aiVoicePreview").textContent = "合成中…";
-    try {
-      const r = await apiPost("/api/admin/ai/tts-sample", { voice });
-      const audio = new Audio(API + r.sampleUrl); // sampleUrl 是相对路径，需补 API 源
-      await audio.play();
-      $("aiVoicePreview").textContent = "▶ 试听";
-    } catch (e) {
-      $("aiTtsMsg").textContent = e.message;
-      $("aiVoicePreview").textContent = "▶ 试听";
-    } finally {
-      $("aiVoicePreview").disabled = false;
     }
   });
 
@@ -656,24 +707,58 @@
     $("aiList").innerHTML = list
       .map((s) => {
         const statusBadge = s.status === 2 ? `<span class="badge p1">已上架</span>` : `<span class="badge p0">草稿</span>`;
-        const audioBadge = s.audioUrl ? `<span class="badge p1">配音✅</span>` : "";
+        // 有新变体结构的故事按变体计数显示；无变体的老故事沿用 stories.audio_url
+        const variantBadge = s.variantCount > 0
+          ? s.variantAudioCount >= s.variantCount
+            ? `<span class="badge p1">配音✅</span>`
+            : `<span class="badge p1">配音 ${s.variantAudioCount}/${s.variantCount}</span>`
+          : s.audioUrl ? `<span class="badge p1">配音✅</span>` : "";
         const coverBadge = s.coverUrl ? `<span class="badge p1">封面✅</span>` : "";
+        const actions =
+          (s.variantCount < 4 ? `<button data-id="${s.id}" class="ai-variant-quick">🧩 补变体</button>` : "") +
+          (s.variantCount > 0
+            ? s.variantAudioCount < s.variantCount
+              ? `<button data-id="${s.id}" data-vc="${s.variantCount}" class="ai-tts-quick">🔊 配音</button>`
+              : ""
+            : s.audioUrl ? "" : `<button data-id="${s.id}" data-vc="0" class="ai-tts-quick">🔊 配音</button>`) +
+          (s.coverUrl ? "" : `<button data-id="${s.id}" class="ai-cover-quick">🎨 封面</button>`);
         return `<div class="ai-item">
           <div class="t">
             <b>${escapeHtml(s.title)}</b> · ${escapeHtml(s.city)} · ${escapeHtml(s.slug)}
-            <div class="meta">${statusBadge} ${audioBadge} ${coverBadge} ${fmtTime(s.createdAt)}</div>
+            <div class="meta">${statusBadge} ${variantBadge} ${coverBadge} ${fmtTime(s.createdAt)}</div>
           </div>
-          ${s.audioUrl ? "" : `<button data-id="${s.id}" class="ai-tts-quick">🔊 配音</button>`}
-          ${s.coverUrl ? "" : `<button data-id="${s.id}" class="ai-cover-quick">🎨 封面</button>`}
+          ${actions}
         </div>`;
       })
       .join("");
+    // 补变体：为缺失的讲述模式补生成脚本
+    $("aiList").querySelectorAll(".ai-variant-quick").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "生成中…";
+        try {
+          const r = await apiPost("/api/admin/ai/variants", { storyId: Number(btn.dataset.id) });
+          const failed = (r.variants || []).filter((v) => v.error).length;
+          if (failed) toast(`补变体完成，${failed} 个模式失败，可重试`);
+          loadAiList().catch(() => {});
+        } catch (e) {
+          toast("补变体失败：" + e.message);
+          btn.disabled = false;
+          btn.textContent = "🧩 补变体";
+        }
+      });
+    });
+    // 配音：有变体的故事补缺的模式（默认从 chat 开始）；无变体的老故事走旧接口
     $("aiList").querySelectorAll(".ai-tts-quick").forEach((btn) => {
       btn.addEventListener("click", async () => {
         btn.disabled = true;
         btn.textContent = "合成中…";
         try {
-          await apiPost("/api/admin/ai/tts", { storyId: Number(btn.dataset.id) });
+          if (Number(btn.dataset.vc) > 0) {
+            await apiPost("/api/admin/ai/variant-tts", { storyId: Number(btn.dataset.id), mode: "chat" });
+          } else {
+            await apiPost("/api/admin/ai/tts", { storyId: Number(btn.dataset.id) });
+          }
           loadAiList().catch(() => {});
         } catch (e) {
           btn.textContent = "失败";

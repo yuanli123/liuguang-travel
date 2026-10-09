@@ -347,6 +347,7 @@ const defaultState = {
   feedSearchOpen: false,
   playbackProgress: {}, // { storyId: seconds_played }
   playbackCompleted: {}, // { storyId: true } — 已完播
+  modePref: {}, // { storyId: mode } 上次使用的讲述模式（仅本地，不进云端同步）
   userLat: null,
   userLng: null,
   userCity: null, // 定位反查出的城市（高德逆地理编码）
@@ -394,7 +395,11 @@ const state = loadState();
    ================================================================ */
 const API_BASE = "http://localhost:3000";
 let apiOnline = false; // 最近一次请求成功即 true；失败即 false
-const scriptCache = {}; // slug -> { script, source }（详情正文缓存）
+const scriptCache = {}; // slug -> { script, source, variants, defaultMode }（详情正文缓存）
+
+// 讲述模式（与 server/src/lib/modes.js 同源；顺序与后端 variants 返回一致）
+const MODE_LABELS = { chat: "日常聊天", story: "娓娓道来", suspense: "悬念夜谈", pingshu: "说书人" };
+const MODE_ORDER = ["chat", "story", "suspense", "pingshu"];
 
 // 高德开放平台 Web端（JS API）Key；安全密钥明文方式仅限本地开发，上线需换服务端代理
 const AMAP_KEY = "d6c071bd48d515187d4cea2a72aa849c";
@@ -1323,6 +1328,7 @@ const tts = {
   sentAccumMs: 0,
   _cur: null,
   audio: null, // AI 配音故事的真实音频元素（null = 浏览器语音合成模式）
+  mode: null, // 当前讲述模式 key（null = 默认，未主动选择；有变体的故事播放时被赋值）
   CHARS_PER_SEC: 4.5, // 1x 语速下估算朗读速度（字/秒）
 };
 
@@ -1386,9 +1392,10 @@ function ttsTotalSeconds() {
   return tts.totalChars / tts.CHARS_PER_SEC;
 }
 
-function ttsSetup(id, script, audioUrl) {
+function ttsSetup(id, script, audioUrl, mode) {
   stopTts();
   tts.storyId = id;
+  tts.mode = mode || null;
   tts.sentences = splitSentences(script);
   tts.cumStart = [];
   tts.totalChars = 0;
@@ -1627,6 +1634,14 @@ function openPlayer(id) {
 
   // 初始化 TTS（AI 配音故事走真实音频模式，否则浏览器语音合成）
   ttsSetup(id, s.script, s.audioUrl);
+  // 变体缓存已在手：直接用选定模式（上次用过的 > 默认）重设脚本与音频，断点续播也落在该模式上
+  const cachedVariants = scriptCache[id] && scriptCache[id].variants;
+  if (cachedVariants && cachedVariants.length >= 2) {
+    const mode = pickMode(id, scriptCache[id].defaultMode, cachedVariants);
+    const v = cachedVariants.find((x) => x.mode === mode);
+    if (v) ttsSetup(id, v.script, v.audioUrl, mode);
+  }
+  renderModeChips(tts.mode); // 已有变体缓存时立即渲染切换行，否则等详情到达
 
   // 断点续播
   const savedProgress = state.playbackProgress[id] || 0;
@@ -1673,10 +1688,18 @@ async function refreshScript(s) {
       signal: ctrl.signal,
     });
     const detail = d.story || {};
+    const rawVariants = Array.isArray(detail.variants) ? detail.variants : null;
     scriptCache[s.id] = {
       script: detail.script || s.script,
       source: detail.sourceNote || s.source,
       audioUrl: detail.audioUrl ? API_BASE + detail.audioUrl : null,
+      variants: rawVariants
+        ? rawVariants.map((v) => ({
+            ...v,
+            audioUrl: v.audioUrl ? API_BASE + v.audioUrl : null,
+          }))
+        : null,
+      defaultMode: detail.defaultMode || null,
     };
     applyScript(s, scriptCache[s.id]);
   } catch (_) {
@@ -1686,13 +1709,79 @@ async function refreshScript(s) {
   }
 }
 
-function applyScript(s, { script, source, audioUrl }) {
+/** 选定讲述模式：上次用过的 > 默认模式 > 第一个可用变体 */
+function pickMode(storyId, defaultMode, variants) {
+  if (state.modePref[storyId] && variants.some((v) => v.mode === state.modePref[storyId])) {
+    return state.modePref[storyId];
+  }
+  if (defaultMode && variants.some((v) => v.mode === defaultMode)) return defaultMode;
+  return variants[0].mode;
+}
+
+/** 渲染讲述方式切换行（仅 ≥2 个变体时显示；active 为当前模式，null = 未高亮） */
+function renderModeChips(active) {
+  const row = $("modeRow");
+  const cached = scriptCache[state.currentPlayId];
+  const variants = cached && cached.variants ? cached.variants : [];
+  if (variants.length < 2) {
+    row.classList.add("hidden");
+    row.innerHTML = "";
+    return;
+  }
+  row.classList.remove("hidden");
+  row.innerHTML = variants
+    .map((v) => {
+      const label = MODE_LABELS[v.mode] || v.mode;
+      return `<button type="button" class="mode-chip${v.mode === active ? " active" : ""}" data-mode="${v.mode}">${label}</button>`;
+    })
+    .join("");
+  row.querySelectorAll(".mode-chip").forEach((chip) => {
+    chip.addEventListener("click", () => selectMode(chip.dataset.mode));
+  });
+}
+
+/** 切换讲述模式：停当前播放 → 载入该变体脚本+音频 → 从 0 开始播；记住本次选择 */
+function selectMode(mode) {
+  const cached = scriptCache[state.currentPlayId];
+  if (!cached || !cached.variants) return;
+  const v = cached.variants.find((x) => x.mode === mode);
+  if (!v) return;
+  state.modePref[state.currentPlayId] = mode;
+  saveState();
+  ttsSetup(state.currentPlayId, v.script, v.audioUrl, mode);
+  ttsSeekTo(0);
+  ttsSpeakFrom(0);
+  renderModeChips(mode);
+}
+
+function applyScript(s, { script, source, audioUrl, variants, defaultMode }) {
+  if (variants) {
+    s.variants = variants;
+    s.defaultMode = defaultMode || "chat";
+  }
   const changed = script && script !== s.script;
   s.script = script || s.script;
   s.source = source || s.source;
   const isCurrent = state.currentPlayId === s.id;
   if (isCurrent) {
     $("sourceNote").textContent = `信源说明：${s.source}`;
+    // 讲述模式变体到达：渲染切换行；还没真正开读（第 0 句、<1s；音频模式看已播时长）时切到目标模式开播
+    if (variants && variants.length) {
+      const notStarted =
+        tts.idx === 0 &&
+        tts.sentAccumMs < 1000 &&
+        (tts.audio ? tts.audio.currentTime < 1 : true);
+      if (notStarted) {
+        const mode = pickMode(s.id, s.defaultMode, variants);
+        const v = variants.find((x) => x.mode === mode);
+        if (v) {
+          ttsSetup(s.id, v.script, v.audioUrl, mode);
+          ttsSpeakFrom(0);
+        }
+      }
+      renderModeChips(tts.mode);
+      return;
+    }
     // AI 配音音频随详情到达：当前还没开读且非音频模式时热切换
     if (audioUrl && !tts.audio && tts.idx === 0 && tts.sentAccumMs < 1000) {
       s.audioUrl = audioUrl;

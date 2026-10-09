@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS stories (
   source_note  VARCHAR(500)    NULL COMMENT '信源说明，展示在播放页底部',
   city         VARCHAR(32)     NOT NULL COMMENT '所属城市',
   status       TINYINT         NOT NULL DEFAULT 0 COMMENT '状态：0草稿 1审核中 2已上架 3下架',
+  default_mode VARCHAR(20)     NOT NULL DEFAULT 'chat' COMMENT '默认讲述模式（chat/story/suspense/pingshu）',
   play_count   INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '播放次数（冗余计数，加速列表排序）',
   created_by   BIGINT UNSIGNED NULL COMMENT '创建者用户ID（内容创作者/管理员）',
   published_at DATETIME        NULL COMMENT '上架时间',
@@ -61,6 +62,20 @@ CREATE TABLE IF NOT EXISTS stories (
   KEY idx_city_status (city, status),
   KEY idx_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='故事';
+
+CREATE TABLE IF NOT EXISTS story_variants (
+  id           BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '变体ID',
+  story_id     BIGINT UNSIGNED NOT NULL COMMENT '故事ID',
+  mode         VARCHAR(20)     NOT NULL COMMENT '讲述模式：chat日常聊天/story娓娓道来/suspense悬念夜谈/pingshu说书人',
+  script       TEXT            NOT NULL COMMENT '该模式脚本正文',
+  audio_url    VARCHAR(255)    NULL COMMENT '配音地址（NULL=未配音，播放时回退浏览器语音合成）',
+  voice        VARCHAR(64)     NOT NULL COMMENT 'edge-tts 音色名',
+  duration_sec INT UNSIGNED    NOT NULL DEFAULT 0 COMMENT '预计收听时长（秒）',
+  created_at   DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_story_mode (story_id, mode),
+  KEY idx_story (story_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='故事讲述模式变体（每模式一份脚本与配音）';
 
 CREATE TABLE IF NOT EXISTS points (
   id       BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '点位ID',

@@ -1002,6 +1002,27 @@ input {
   background: var(--orange);
 }
 
+/* 讲述方式切换（播放页，位于情绪标签下方） */
+.mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.mode-chip {
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mode-chip.active {
+  background: var(--teal);
+}
+
 .player-actions {
   display: flex;
   gap: 10px;

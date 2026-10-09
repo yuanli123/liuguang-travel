@@ -7,6 +7,42 @@ const { extractToken } = require("../middleware/auth");
 
 const router = express.Router();
 
+const { DEFAULT_MODE, MODE_KEYS, BY_KEY } = require("../lib/modes");
+
+/** 变体固定展示顺序（FIELD 与前端 MODE_ORDER 一致） */
+const MODE_ORDER_SQL = MODE_KEYS.map((k) => `'${k}'`).join(",");
+
+/**
+ * 详情里的讲述模式变体：
+ *   - 有变体记录 → 按固定顺序返回
+ *   - 无任何变体（迁移未跑/新装环境）→ 用 stories.script 现场合成 mode='story' 虚拟变体，
+ *     保证旧数据永远可渲染，播放器只是没有切换行
+ */
+async function loadVariants(story) {
+  let rows = [];
+  try {
+    [rows] = await pool.query(
+      `SELECT mode, script, audio_url AS audioUrl, voice, duration_sec AS durationSec
+         FROM story_variants WHERE story_id = ? ORDER BY FIELD(mode, ${MODE_ORDER_SQL})`,
+      [story.id]
+    );
+  } catch (e) {
+    // 表不存在（迁移未执行）按无变体处理，详情仍可用
+    console.warn("story_variants 读取失败（是否未执行 db:migrate-variants？）:", e.message);
+  }
+  const variants = rows.map((v) => ({ ...v, durationSec: Number(v.durationSec) || 0 }));
+  if (variants.length) return variants;
+  return [
+    {
+      mode: "story",
+      script: story.script,
+      audioUrl: story.audioUrl,
+      voice: BY_KEY.story.voice,
+      durationSec: Number(story.durationSec) || 0,
+    },
+  ];
+}
+
 // 列表/详情共用的基础列；spot 取故事关联的第一个点位名，category 取关联主题名
 // （FROM 单独拆开：详情需要在列清单里追加 script 等字段，不能拼在 FROM 之后）
 const BASE_COLUMNS = `
@@ -87,6 +123,21 @@ router.get("/:id", async (req, res) => {
   }
   const story = rows[0];
   story.emotionTags = safeEmotionTags(story.emotionTags);
+
+  // 讲述模式变体；story.script/audioUrl 与默认模式对齐（老客户端不破）
+  const variants = await loadVariants(story);
+  let defaultMode = DEFAULT_MODE;
+  try {
+    const [[row]] = await pool.query("SELECT default_mode AS dm FROM stories WHERE id = ?", [story.id]);
+    if (row && row.dm) defaultMode = String(row.dm);
+  } catch (_) {
+    /* 列不存在（迁移未执行）→ 用默认值，实际模式回退到第一个变体 */
+  }
+  const def = variants.find((v) => v.mode === defaultMode) || variants[0];
+  story.script = def.script;
+  story.audioUrl = def.audioUrl;
+  story.defaultMode = def.mode;
+  story.variants = variants;
 
   // 关联点位（mysql2 对 DECIMAL 返回字符串，需转 Number）
   const [points] = await pool.query(
