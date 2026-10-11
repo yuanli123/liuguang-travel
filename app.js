@@ -1068,6 +1068,10 @@ function renderCityTags() {
     b.textContent = c;
     b.addEventListener("click", () => {
       state.cityFilter = c;
+      // 切换城市是新筛选意图：清掉残留搜索词（搜索栏折叠后关键词仍隐形生效，
+      // 不清会导致「点了城市却显示暂无匹配故事」）
+      const input = $("feedSearchInput");
+      if (input && input.value) input.value = "";
       renderCityTags();
       renderFeed();
       saveState();
@@ -2351,6 +2355,9 @@ function init() {
   // 预览事件
   $("previewStart").addEventListener("click", () => {
     closePreview();
+    // 与城市标签同理：清掉残留搜索词，避免与城市筛选叠加
+    const input = $("feedSearchInput");
+    if (input && input.value) input.value = "";
     if (lastPreviewCity) {
       state.cityFilter = lastPreviewCity;
       renderCityTags();
