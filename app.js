@@ -648,6 +648,9 @@ function setNav(name) {
   document.querySelectorAll(".nav-item").forEach((n) => {
     n.classList.toggle("active", n.dataset.nav === name);
   });
+  // 行程路线示意按容器实际宽度做像素定位，
+  // 在面板隐藏时（如播放页加入行程）渲染会拿到 0 宽度，进入「我的」时重渲染纠正
+  if (name === "me") renderTripList();
   saveState();
 }
 
@@ -752,6 +755,17 @@ function getNearbyStories(radiusMeters = 200) {
 function formatDistance(meters) {
   if (meters < 1000) return `${Math.round(meters)}m`;
   return `${(meters / 1000).toFixed(1)}km`;
+}
+
+/** 按两地距离推荐交通工具 */
+function recommendTransport(meters) {
+  const km = meters / 1000;
+  if (km < 1) return { icon: "🚶", name: "步行" };
+  if (km < 3) return { icon: "🚲", name: "骑行" };
+  if (km < 20) return { icon: "🚇", name: "地铁" };
+  if (km < 60) return { icon: "🚕", name: "打车" };
+  if (km < 300) return { icon: "🚄", name: "高铁" };
+  return { icon: "✈️", name: "飞机" };
 }
 
 async function requestUserLocation() {
@@ -1162,6 +1176,7 @@ function renderTripList() {
     ul.innerHTML =
       '<li class="trip-empty"><span class="empty">还没有行程点，在播放页或地图卡片里点「加入行程」吧～</span></li>';
     $("aiRouteMeta").textContent = "添加行程点后自动生成";
+    $("routeMapVisual").style.height = "";
     $("routeMapVisual").innerHTML =
       '<p style="margin:0;padding:40px 16px;text-align:center;color:#888;font-size:13px;">暂无路线示意</p>';
     return;
@@ -1171,13 +1186,27 @@ function renderTripList() {
     .map((id) => getStory(id))
     .filter(Boolean)
     .map((s, i) => ({ ...s, order: i + 1 }));
-  const fakeKm = (items.length * 2.8).toFixed(1);
-  const fakeMin = Math.max(15, items.length * 18);
+
+  // 相邻两地点的分段距离与交通建议（按行程顺序）
+  const segments = [];
+  for (let i = 0; i < items.length - 1; i++) {
+    const a = items[i];
+    const b = items[i + 1];
+    if (a.lat == null || a.lng == null || b.lat == null || b.lng == null) {
+      segments.push(null); // 缺坐标：该段不标注
+      continue;
+    }
+    const meters = calcDistance(a.lat, a.lng, b.lat, b.lng);
+    segments.push({ meters, ...recommendTransport(meters) });
+  }
+
   $("aiRouteMeta").textContent =
-    `总距离约 ${fakeKm} km · 预估步行 ${Math.round(fakeMin / 60)}h${fakeMin % 60}m（演示）`;
+    items.length <= 1
+      ? `已添加 ${items.length} 个地点，再加一个即可计算点间距离与交通建议`
+      : `共 ${items.length} 个地点 · ${segments.length} 段路程，逐段标注距离与交通建议`;
 
   const names = items.map((x) => x.spot.split(" · ").pop() || x.title);
-  $("routeMapVisual").innerHTML = buildRouteSvg(names);
+  $("routeMapVisual").innerHTML = buildRouteSvg(names, segments, $("routeMapVisual"));
 
   items.forEach((s, i) => {
     const li = document.createElement("li");
@@ -1197,13 +1226,23 @@ function renderTripList() {
   });
 }
 
-function buildRouteSvg(labels) {
+function buildRouteSvg(labels, segments = [], containerEl = null) {
   const w = 100;
   const h = 100;
+  // 图高随点数自适应：保证相邻两点的纵向落差放得下
+  // 「节点标签（约17px）+ 段标注（约15px）」的垂直堆叠，避免重叠
+  const height = Math.max(120, 60 * (labels.length - 1));
+  const width = containerEl ? containerEl.clientWidth : 358;
+  const scale = height / 100;
+  const offsetX = (width - 100 * scale) / 2; // 等比例缩放后水平居中（letterbox）
+  if (containerEl) containerEl.style.height = `${height}px`;
+
   const points = labels.map((_, i) => {
     const t = labels.length <= 1 ? 0.5 : i / (labels.length - 1);
-    const x = 12 + t * 76 + Math.sin(i) * 6;
-    const y = 78 - t * 58 + Math.cos(i * 0.8) * 8;
+    // x 方向带轻微抖动让路线更自然；y 方向保持等距，
+    // 否则相邻点纵向落差不均会挤压「节点标签/段标注」之间的空隙
+    const x = 12 + t * 76 + Math.sin(i) * 4;
+    const y = 78 - t * 58;
     return { x, y, label: labels[i] };
   });
   const d = points
@@ -1211,7 +1250,23 @@ function buildRouteSvg(labels) {
     .join(" ");
   let nodes = "";
   points.forEach((p, i) => {
-    nodes += `<span class="route-node" style="left:${p.x - 8}%;top:${p.y - 10}%;">${p.label}</span>`;
+    const left = offsetX + (p.x - 8) * scale;
+    const top = p.y * scale - 16; // 固定在点上方 16px，不随缩放漂移
+    nodes += `<span class="route-node" style="left:${left}px;top:${top}px;">${p.label}</span>`;
+  });
+  // 段标注：放在该段中点上方 7.5px，恰好落在两端节点标签之间的空隙中央
+  let segLabels = "";
+  segments.forEach((seg, i) => {
+    if (!seg) return; // 缺坐标的段不标注
+    const a = points[i];
+    const b = points[i + 1];
+    const left = offsetX + ((a.x + b.x) / 2) * scale;
+    const top = ((a.y + b.y) / 2) * scale - 7.5;
+    const dist =
+      seg.meters >= 100000
+        ? `${Math.round(seg.meters / 1000)}km`
+        : formatDistance(seg.meters);
+    segLabels += `<span class="route-seg" style="left:${left}px;top:${top}px;">${dist} ${seg.icon} ${seg.name}</span>`;
   });
   return `
     <svg class="route-path-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet">
@@ -1231,6 +1286,7 @@ function buildRouteSvg(labels) {
         .join("")}
     </svg>
     ${nodes}
+    ${segLabels}
   `;
 }
 
@@ -1927,6 +1983,11 @@ function bindAudioUi() {
   window.addEventListener("beforeunload", () => {
     _saveCurrentProgress();
     syncNow();
+  });
+
+  // 窗口尺寸变化时，行程路线示意按新宽度重排（像素定位不会自动跟随）
+  window.addEventListener("resize", () => {
+    if (state.nav === "me") renderTripList();
   });
 }
 
