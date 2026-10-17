@@ -1062,7 +1062,8 @@ function tryMapSearchPreview() {
     toast("已定位到相关故事点");
     return;
   }
-  toast("未找到匹配结果，试试「北京」「故宫」或故事名～");
+  // 搜索无结果：兜底入口——打开按需生成面板，预填搜索词
+  openOdPanel(q);
 }
 
 /* ================================================================
@@ -1111,7 +1112,14 @@ function renderFeed() {
   const filtered = STORIES.filter(storyMatchesFilter);
   if (filtered.length === 0) {
     list.innerHTML =
-      '<p class="empty-hint">暂无匹配故事，换个城市或关键词试试～</p>';
+      '<p class="empty-hint">暂无匹配故事，换个城市或关键词试试～</p>' +
+      '<button type="button" class="btn-secondary od-empty-cta">📷 拍景点 · 现场生成故事</button>';
+    const cta = list.querySelector(".od-empty-cta");
+    if (cta) {
+      cta.addEventListener("click", () => {
+        openOdPanel(($("feedSearchInput")?.value || "").trim());
+      });
+    }
     return;
   }
   filtered.forEach((s) => {
@@ -1325,6 +1333,223 @@ function renderFavList() {
     li.addEventListener("click", () => openPlayer(s.id));
     ul.appendChild(li);
   });
+}
+
+/* ================================================================
+   按需生成（拍景点·现场听故事）
+   ================================================================ */
+const OD_STAGE_TEXT = { searching: "搜集资料", writing: "创作故事", voicing: "配音" };
+const OD_STAGE_ORDER = ["searching", "writing", "voicing"];
+let odPollTimer = null;
+let odPhotoB64 = null; // 当前已选照片 base64（不含 data: 前缀）
+
+function escapeHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function openOdPanel(presetName = "") {
+  $("odPanel").classList.remove("hidden");
+  $("odPanel").setAttribute("aria-hidden", "false");
+  if (presetName) $("odNameInput").value = presetName;
+  odResetBody();
+  updateOdLocHint();
+}
+
+function closeOdPanel() {
+  clearInterval(odPollTimer);
+  odPollTimer = null;
+  $("odPanel").classList.add("hidden");
+  $("odPanel").setAttribute("aria-hidden", "true");
+}
+
+function odResetBody() {
+  $("odSteps").innerHTML = "";
+  $("odFast").classList.add("hidden");
+  $("odFast").innerHTML = "";
+  $("odCandidates").classList.add("hidden");
+  $("odCandidates").innerHTML = "";
+  $("odError").classList.add("hidden");
+  $("odSubmit").disabled = false;
+}
+
+function updateOdLocHint() {
+  $("odLocHint").textContent =
+    state.userLat != null
+      ? "📍 已获取定位，识别更准"
+      : "⚠️ 未获取定位，将按名称生成";
+}
+
+function odShowError(msg) {
+  const el = $("odError");
+  el.textContent = msg || "生成失败，请稍后重试";
+  el.classList.remove("hidden");
+  $("odSubmit").disabled = false;
+}
+
+/** 读取已选照片为 base64（>4M 提示压缩，不提交） */
+function odReadPhoto(file) {
+  if (!file) return;
+  if (file.size > 4 * 1024 * 1024) {
+    toast("照片超过 4M，请压缩或换一张");
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => {
+    odPhotoB64 = String(reader.result || "").replace(/^data:image\/\w+;base64,/, "");
+    const preview = $("odPhotoPreview");
+    preview.src = reader.result;
+    preview.classList.remove("hidden");
+    $("odPhotoBtn").textContent = "换一张照片";
+    updateOdLocHint();
+  };
+  reader.readAsDataURL(file);
+}
+
+async function odSubmit() {
+  const name = $("odNameInput").value.trim();
+  if (!name && !odPhotoB64 && state.userLat == null) {
+    toast("请拍照、输入景点名，或先开启定位");
+    return;
+  }
+  odResetBody();
+  $("odSubmit").disabled = true;
+  $("odSteps").innerHTML = '<span class="od-step active">识别中</span>';
+  const body = {
+    name: name || undefined,
+    image: odPhotoB64 || undefined,
+    lat: state.userLat ?? undefined,
+    lng: state.userLng ?? undefined,
+  };
+  try {
+    const d = await api("/api/on-demand/recognize", {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    if (d.needConfirm) {
+      odShowCandidates(d.candidates || []);
+      return;
+    }
+    odStartPolling(d);
+  } catch (e) {
+    odShowError(e.message);
+  }
+}
+
+function odStartPolling(d) {
+  $("odSubmit").disabled = true;
+  odShowFast(d.fast);
+  if (d.stage === "done") {
+    odOpenPlayer(d);
+    return;
+  }
+  odRenderSteps(d.stage);
+  clearInterval(odPollTimer);
+  odPollTimer = setInterval(() => odPoll(d.jobId), 2000);
+}
+
+async function odPoll(jobId) {
+  try {
+    const d = await api("/api/on-demand/" + jobId);
+    if (d.stage === "done") {
+      clearInterval(odPollTimer);
+      odPollTimer = null;
+      odRenderSteps("done");
+      odOpenPlayer(d);
+    } else if (d.stage === "failed") {
+      clearInterval(odPollTimer);
+      odPollTimer = null;
+      odShowError(d.error);
+    } else {
+      odRenderSteps(d.stage);
+    }
+  } catch (e) {
+    clearInterval(odPollTimer);
+    odPollTimer = null;
+    odShowError(e.message);
+  }
+}
+
+function odRenderSteps(stage) {
+  const idx = OD_STAGE_ORDER.indexOf(stage);
+  $("odSteps").innerHTML = OD_STAGE_ORDER.map((s, i) => {
+    const cls = i < idx || stage === "done" ? "done" : i === idx ? "active" : "";
+    return `<span class="od-step ${cls}">${OD_STAGE_TEXT[s]}</span>`;
+  }).join('<span class="od-step-sep">→</span>');
+}
+
+function odShowFast(fast) {
+  if (!fast || (!fast.summary && !fast.sources.length)) return;
+  const el = $("odFast");
+  el.classList.remove("hidden");
+  el.innerHTML = `
+    <p class="od-fast-title">⚡ 速览（故事生成中，先看看）</p>
+    ${fast.summary ? `<p class="od-fast-summary">${escapeHtml(fast.summary)}</p>` : ""}
+    <p class="od-fast-sources">${fast.sources
+      .map((s) =>
+        s.url
+          ? `<a href="${escapeHtml(s.url)}" target="_blank" rel="noopener">${escapeHtml(s.title)}</a>`
+          : escapeHtml(s.title)
+      )
+      .join(" · ")}</p>
+    <p class="od-fast-note">AI 生成 · 未经核查，仅供参考</p>`;
+}
+
+function odShowCandidates(list) {
+  const el = $("odCandidates");
+  el.classList.remove("hidden");
+  el.innerHTML =
+    '<p class="od-cand-title">没有直接认出来，你在这附近吗？点选或在上方输入名称：</p>' +
+    list
+      .map(
+        (c) =>
+          `<button type="button" class="od-cand" data-name="${escapeHtml(c.name)}">${escapeHtml(c.name)}${
+            c.distanceM ? ` · ${formatDistance(c.distanceM)}` : ""
+          }</button>`
+      )
+      .join("");
+  el.querySelectorAll(".od-cand").forEach((b) => {
+    b.addEventListener("click", () => {
+      $("odNameInput").value = b.dataset.name;
+      odSubmit();
+    });
+  });
+  $("odSubmit").disabled = false;
+}
+
+/** 按需故事播放：单模式、未核查角标、不参与收藏/行程/历史 */
+function odOpenPlayer(d) {
+  const story = d.story;
+  const spot = d.spot || {};
+  if (!story) {
+    odShowError("故事生成失败，请稍后重试");
+    return;
+  }
+  stopTts();
+  const pid = "od-" + (d.jobId || Date.now().toString(36));
+  state.currentPlayId = pid;
+  const overlay = $("playerOverlay");
+  overlay.classList.remove("hidden");
+  overlay.setAttribute("aria-hidden", "false");
+  $("playerBg").style.backgroundImage = "";
+  $("playerMood").textContent = "AI 生成 · 未经核查";
+  $("playerTitle").textContent = story.title;
+  $("playerLoc").textContent = spot.name + (spot.city ? ` · ${spot.city}` : "");
+  $("playerHook").textContent = story.hook;
+  $("sourceNote").textContent = `信源说明：${story.sourceNote}`;
+  $("modeRow").classList.add("hidden");
+  $("modeRow").innerHTML = "";
+  $("nextStoryBlock").classList.add("hidden");
+  $("btnAddTrip").classList.add("hidden");
+  $("btnToggleFav").classList.add("hidden");
+  closeOdPanel();
+  ttsSetup(pid, story.script, story.audioUrl ? API_BASE + story.audioUrl : null);
+  bindSpeedButtons();
+  updateTtsPlayBtn();
+  ttsSpeakFrom(0);
 }
 
 /* ================================================================
@@ -1585,13 +1810,16 @@ function ttsFinish() {
   tts.finished = true;
   tts.paused = false;
   const id = tts.storyId;
-  state.playbackCompleted[id] = true;
-  state.playbackProgress[id] = 0;
-  saveState();
+  const isOd = String(id).startsWith("od-"); // 按需生成不进入听单/进度（一次性播放）
+  if (!isOd) {
+    state.playbackCompleted[id] = true;
+    state.playbackProgress[id] = 0;
+    saveState();
+    scheduleSync();
+    toast("故事已听完，为你推荐下一个 👇");
+  }
   updateTtsPlayBtn();
   renderFeed();
-  toast("故事已听完，为你推荐下一个 👇");
-  scheduleSync();
 }
 
 function stopTts() {
@@ -1678,6 +1906,11 @@ function openPlayer(id) {
   const overlay = $("playerOverlay");
   overlay.classList.remove("hidden");
   overlay.setAttribute("aria-hidden", "false");
+
+  // 按需播放隐藏过的控件恢复显示（普通故事全部可用）
+  $("btnAddTrip").classList.remove("hidden");
+  $("btnToggleFav").classList.remove("hidden");
+  $("nextStoryBlock").classList.remove("hidden");
 
   $("playerBg").style.backgroundImage = coverBg(s);
   $("playerMood").textContent = s.mood;
@@ -1879,6 +2112,7 @@ function closePlayer() {
 function _saveCurrentProgress() {
   const id = tts.storyId || state.currentPlayId;
   if (!id || tts.finished) return;
+  if (String(id).startsWith("od-")) return; // 按需生成不保存进度（一次性播放）
   const sec = ttsProgressSeconds();
   if (sec <= 0) return;
   state.playbackProgress[id] = sec;
@@ -2413,6 +2647,15 @@ function init() {
   });
   $("feedSearchInput").addEventListener("input", () => renderFeed());
 
+  // 按需生成（拍景点·现场听故事）
+  $("btnCamera").addEventListener("click", () => openOdPanel());
+  $("odClose").addEventListener("click", closeOdPanel);
+  $("odPhotoBtn").addEventListener("click", () => $("odPhotoInput").click());
+  $("odPhotoInput").addEventListener("change", (e) =>
+    odReadPhoto(e.target.files && e.target.files[0])
+  );
+  $("odSubmit").addEventListener("click", odSubmit);
+
   // 预览事件
   $("previewStart").addEventListener("click", () => {
     closePreview();
@@ -2440,11 +2683,15 @@ function init() {
     speechSynthesis.getVoices();
   }
 
-  // 全局键盘事件（纠错弹层优先关闭，其次播放器）
+  // 全局键盘事件（纠错弹层 > 按需生成面板 > 播放器）
   document.addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;
     if (reportEls && !reportEls.sheet.classList.contains("hidden")) {
       closeReportSheet(); // 只关纠错弹层，播放器保持打开
+      return;
+    }
+    if (!$("odPanel").classList.contains("hidden")) {
+      closeOdPanel();
       return;
     }
     if (!$("playerOverlay").classList.contains("hidden")) {

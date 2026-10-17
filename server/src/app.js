@@ -10,8 +10,6 @@ const config = require("./config");
 
 const app = express();
 
-app.use(express.json()); // 本阶段尚无 POST，为后续 auth/sync 预留
-
 app.use(
   cors({
     origin: (origin, cb) => {
@@ -23,6 +21,11 @@ app.use(
     },
   })
 );
+
+// 按需生成路由先挂载：照片 base64 可达数 MB，用独立请求体上限（全局 100kb 会先拒绝）
+app.use("/api/on-demand", express.json({ limit: "6mb" }), require("./routes/on-demand"));
+
+app.use(express.json()); // 其余路由维持默认 100kb
 
 // 根路径：接口导航（浏览器直接访问时不再困惑）
 app.get("/", (req, res) => {
@@ -50,6 +53,8 @@ app.get("/", (req, res) => {
       "POST /api/admin/ai/tts-sample  合成一句音色试听（按音色缓存，需 ADMIN_TOKEN）",
       "POST /api/admin/ai/cover       生成/重生成故事封面（本地 SVG，需 ADMIN_TOKEN）",
       "GET /api/admin/ai/list         AI 生成故事列表（需 ADMIN_TOKEN）",
+      "POST /api/on-demand/recognize  拍景点现场生成（照片+定位+名称，可选组合）",
+      "GET /api/on-demand/:jobId      按需生成进度轮询（每 2s）",
       "GET /api/geo/ip              IP→城市（定位权限被拒时的兜底）",
     ],
   });

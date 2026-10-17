@@ -1479,3 +1479,228 @@ input {
     border-radius: 0 0 24px 24px;
   }
 }
+
+/* ================================================================
+   拍景点·现场听故事（按需生成）
+   ================================================================ */
+.camera-fab {
+  position: absolute;
+  right: 16px;
+  bottom: 24px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #9b5de5, #ff7e47);
+  color: #fff;
+  font-size: 22px;
+  box-shadow: 0 6px 16px rgba(155, 93, 229, 0.35);
+  cursor: pointer;
+  z-index: 30;
+  transition: transform 0.15s ease;
+}
+.camera-fab:active {
+  transform: scale(0.92);
+}
+
+.od-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  max-width: 420px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: flex-end;
+}
+.od-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(20, 14, 30, 0.55);
+  backdrop-filter: blur(2px);
+}
+.od-card {
+  position: relative;
+  width: 100%;
+  max-height: 86%;
+  overflow-y: auto;
+  background: var(--white);
+  border-radius: 20px 20px 0 0;
+  padding: 18px 16px 22px;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.18);
+}
+.od-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.od-head h3 {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text);
+}
+.od-close {
+  border: none;
+  background: #f3eef9;
+  color: var(--violet);
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 16px;
+  cursor: pointer;
+}
+.od-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.od-photo-btn {
+  padding: 13px;
+  border-radius: var(--radius-md);
+  border: 2px dashed #c9b8f0;
+  background: #faf7ff;
+  color: var(--violet);
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+}
+.od-photo-preview {
+  max-height: 140px;
+  width: 100%;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+}
+.od-name-input {
+  padding: 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid #e5ddd6;
+  font-size: 14px;
+  outline: none;
+}
+.od-name-input:focus {
+  border-color: var(--violet);
+}
+.od-loc-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+.od-steps {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+}
+.od-step {
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #f3eee8;
+  color: #a89b8d;
+  white-space: nowrap;
+}
+.od-step.active {
+  background: #ede4fb;
+  color: var(--violet);
+  font-weight: 700;
+  animation: od-pulse 1.2s ease-in-out infinite;
+}
+.od-step.done {
+  background: #e2f7f3;
+  color: #17a589;
+}
+.od-step-sep {
+  color: #c9bfb4;
+}
+@keyframes od-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.od-fast {
+  border: 1px solid #e8defa;
+  background: #faf7ff;
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+.od-fast-title {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--violet);
+}
+.od-fast-summary {
+  margin: 0 0 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.od-fast-sources {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: #8a7f95;
+  word-break: break-all;
+}
+.od-fast-sources a {
+  color: #7c5cd6;
+}
+.od-fast-note {
+  margin: 0;
+  font-size: 11px;
+  color: #b78a4a;
+}
+.od-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.od-cand-title {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+.od-cand {
+  padding: 10px 12px;
+  text-align: left;
+  border: 1px solid #e5ddd6;
+  border-radius: var(--radius-md);
+  background: #fbf9f7;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.od-cand:active {
+  border-color: var(--violet);
+}
+.od-error {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: #fdeeee;
+  color: #c0392b;
+  font-size: 13px;
+}
+.od-submit {
+  padding: 13px;
+  border-radius: var(--radius-md);
+  border: none;
+  background: linear-gradient(135deg, #9b5de5, #ff7e47);
+  color: #fff;
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+}
+.od-submit:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.od-empty-cta {
+  margin-top: 12px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+}

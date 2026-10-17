@@ -43,7 +43,32 @@
           </div>
         </div>
       </div>
+      <!-- 拍景点·现场听故事 -->
+      <button type="button" class="camera-fab" id="btnCamera" aria-label="拍景点听故事">📷</button>
     </section>
+
+    <!-- 拍景点·现场听故事面板 -->
+    <div id="odPanel" class="od-panel hidden" aria-hidden="true">
+      <div class="od-scrim"></div>
+      <div class="od-card">
+        <header class="od-head">
+          <h3>📷 拍景点 · 现场听故事</h3>
+          <button type="button" class="od-close" id="odClose" aria-label="关闭">×</button>
+        </header>
+        <div class="od-body">
+          <button type="button" class="od-photo-btn" id="odPhotoBtn">拍照或选照片</button>
+          <input type="file" id="odPhotoInput" accept="image/*" capture="environment" class="hidden" />
+          <img id="odPhotoPreview" class="od-photo-preview hidden" alt="已选照片" />
+          <input type="text" id="odNameInput" class="od-name-input" placeholder="或直接输入景点名称（如：天坛）" maxlength="60" autocomplete="off" />
+          <p class="od-loc-hint" id="odLocHint"></p>
+          <div class="od-steps" id="odSteps"></div>
+          <div class="od-fast hidden" id="odFast"></div>
+          <div class="od-candidates hidden" id="odCandidates"></div>
+          <p class="od-error hidden" id="odError"></p>
+          <button type="button" class="btn-primary od-submit" id="odSubmit">生成故事</button>
+        </div>
+      </div>
+    </div>
 
     <!-- 故事 Feed -->
     <section id="view-feed" class="view view-feed">

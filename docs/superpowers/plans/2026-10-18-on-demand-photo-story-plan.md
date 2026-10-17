@@ -1,7 +1,7 @@
 # 「拍景点·现场听故事」实施计划
 
 对应设计文档：`docs/superpowers/specs/2026-10-18-on-demand-photo-story-design.md`
-状态：待实施
+状态：Phase 1-4 已完成（后端+前端+降级矩阵+浏览器端到端验证）；Phase 0（key 申请）与 Phase 5（真实 key 端到端）待需求方办理后进行
 
 ## Phase 0 · 前置准备（需求方办理，可并行）
 

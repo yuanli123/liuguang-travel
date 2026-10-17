@@ -18,16 +18,15 @@ const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
 const { makeCover } = require("../lib/cover");
 const { voiceForTags, sanitizeVoice } = require("../lib/voice");
 const {
-  MODE_KEYS, DEFAULT_MODE, isValidMode, voiceForMode, ttsOptionsForMode, STYLE_HINTS,
+  MODE_KEYS, DEFAULT_MODE, isValidMode, voiceForMode, ttsOptionsForMode,
 } = require("../lib/modes");
-const { callDeepseek, transferModes } = require("../lib/ai-generate");
+const {
+  callDeepseek, transferModes, STORY_SYSTEM_PROMPT, normalizeStory,
+} = require("../lib/ai-generate");
 
 const router = express.Router();
 router.use(adminRequired);
 
-const CITIES = ["北京", "上海", "杭州", "苏州", "成都", "西安", "南京", "厦门"];
-const CATEGORIES = ["历史", "传说", "地质", "人文"];
-const TAG_POOL = ["治愈", "震撼", "怀旧", "神秘", "温暖", "悲壮"];
 // 类别名 → topics 表 id（App 卡片徽章与搜索依赖 story_topics 关联）
 const TOPIC_IDS = { 传说: 1, 历史: 2, 人文: 3, 地质: 4 };
 
@@ -38,56 +37,6 @@ const CITY_COORDS = {
   成都: [30.5728, 104.0668], 西安: [34.3416, 108.9398],
   南京: [32.0603, 118.7969], 厦门: [24.4798, 118.0894],
 };
-
-const SYSTEM_PROMPT = `你是一位资深的旅行故事编剧，擅长把景点写成适合边走边听的沉浸式故事音频脚本。
-根据用户提供的主题/景点与素材，创作一篇故事。要求：
-1. 标题：不超过 20 字，有画面感
-2. 钩子 hook：不超过 40 字，制造悬念或反差，让人想继续听
-3. 正文 script：350-550 字，有具体场景细节，包含一个冲突、悬念或反转，结尾有余味；段落用换行分隔。讲述风格：${STYLE_HINTS.chat}
-4. emotionTags：1-2 个，从 [治愈, 震撼, 怀旧, 神秘, 温暖, 悲壮] 中选
-5. category：从 [历史, 传说, 地质, 人文] 中选一个
-6. city：故事所在城市名（如 北京）
-7. slug：英文短标识（小写字母数字连字符，如 west-lake-legend）
-8. sourceNote：一句话信源性质说明（如「基于公开景区资料与民间传说创作」）
-9. 不编造具体数据，涉及史实用模糊表述
-只输出一个 JSON 对象，不要任何其他文字：
-{"slug":"...","title":"...","hook":"...","emotionTags":["..."],"category":"...","city":"...","script":"...","sourceNote":"..."}`;
-
-/** 归一化并校验故事对象（AI 返回与前端提交共用同一口径） */
-function normalizeStory(s, fallbackTopic) {
-  if (!s || typeof s !== "object") return null;
-  const script = String(s.script || "").trim();
-  const title = String(s.title || "").trim() || String(fallbackTopic || "").trim().slice(0, 20);
-  if (!title || script.length < 100) return null;
-  let slug = String(s.slug || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 50);
-  if (!/^[a-z0-9]{3,}/.test(slug)) slug = "ai-story-" + Date.now().toString(36);
-  let tags = Array.isArray(s.emotionTags)
-    ? s.emotionTags.map((t) => String(t).slice(0, 8)).slice(0, 3)
-    : ["治愈"];
-  tags = tags.filter((t) => TAG_POOL.includes(t));
-  if (!tags.length) tags = ["治愈"];
-  // 去掉已有的「AI 生成」前缀，避免面板二次保存时叠加
-  const noteBase = String(s.sourceNote || "").replace(/^AI 生成[；，,\s]*/, "");
-  return {
-    slug,
-    title: title.slice(0, 128),
-    hook: String(s.hook || "").trim().slice(0, 255) || title.slice(0, 40),
-    emotionTags: tags,
-    category: CATEGORIES.includes(s.category) ? s.category : "人文",
-    city: CITIES.includes(s.city) ? s.city : "其他",
-    script,
-    // 去掉已有的「AI 生成」前缀再统一添加，避免面板二次保存时前缀叠加
-    sourceNote: (
-      "AI 生成，未经事实核查" + (noteBase ? "；" + noteBase : "")
-    ).slice(0, 500),
-    durationSec: Math.max(60, Math.round(script.length / 4.5)), // 与 App 端 CHARS_PER_SEC 同口径
-  };
-}
 
 /** ai_tasks 留痕 */
 async function logTask(type, input, result, status) {
@@ -115,7 +64,7 @@ router.post("/generate", async (req, res) => {
   let story;
   try {
     const parsed = await callDeepseek([
-      { role: "system", content: SYSTEM_PROMPT },
+      { role: "system", content: STORY_SYSTEM_PROMPT },
       { role: "user", content: userPrompt },
     ]);
     story = normalizeStory(parsed, topic);
