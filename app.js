@@ -1005,6 +1005,7 @@ function selectMapStory(id) {
 
   const card = $("mapStoryCard");
   card.classList.remove("hidden");
+  $("btnCamera").classList.add("hidden"); // 故事卡片占满底部，拍照按钮让位
   $("mapCardCover").style.backgroundImage = coverBg(s);
   $("mapCardTitle").textContent = s.title;
   $("mapCardLoc").textContent = s.spot;
@@ -1037,6 +1038,7 @@ function selectMapStory(id) {
 function closeMapCard() {
   state.mapSelectedId = null;
   $("mapStoryCard").classList.add("hidden");
+  $("btnCamera").classList.remove("hidden");
   document.querySelectorAll(".map-pin").forEach((p) => p.classList.remove("active"));
   saveState();
 }
