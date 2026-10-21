@@ -14,7 +14,8 @@ const pool = require("../db");
 const { bochaAiSearch, bochaWebSearch } = require("../lib/websearch");
 const { baiduLandmark, visionIdentify } = require("../lib/vision");
 const { amapAround, amapRegeo } = require("../lib/amap");
-const { callDeepseek, STORY_SYSTEM_PROMPT, normalizeStory } = require("../lib/ai-generate");
+const { callDeepseek, STORY_SYSTEM_PROMPT, storyUserPrompt, normalizeStory } = require("../lib/ai-generate");
+const { factCheckStory } = require("../lib/fact-check");
 const { DEFAULT_MODE, voiceForMode, ttsOptionsForMode } = require("../lib/modes");
 const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
 
@@ -81,17 +82,19 @@ async function runNarrate(jobId, job) {
     const searched = await bochaWebSearch(`${job.spot.name} ${job.spot.city}`.trim());
     const material = searched ? searched.material : "";
     if (job.timedOut) return;
+    // 信源约束写稿（素材为空时按名称写并标注素材有限——按需是即时体验，不阻断）
     const parsed = await callDeepseek([
       { role: "system", content: STORY_SYSTEM_PROMPT },
-      {
-        role: "user",
-        content:
-          `主题/景点：${job.spot.name}\n城市：${job.spot.city || "待定"}\n参考素材：` +
-          (material || "无（素材不足，请基于景点常识创作，史实从模糊表述）"),
-      },
+      { role: "user", content: storyUserPrompt({ topic: job.spot.name, city: job.spot.city, material }) },
     ]);
     const story = normalizeStory(parsed, job.spot.name);
     if (!story) throw new Error("生成的正文过短或缺少标题");
+    // AI 事实核查 pass（有素材时生效；核查失败保留原稿）
+    if (material) {
+      const checked = await factCheckStory(material, story.script);
+      story.script = checked.script;
+      story.durationSec = Math.max(60, Math.round(checked.script.length / 4.5));
+    }
     if (job.timedOut) return;
     job.story = story;
     job.stage = "voicing";

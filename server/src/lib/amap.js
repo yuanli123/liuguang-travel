@@ -52,4 +52,36 @@ async function amapRegeo(lat, lng) {
   }
 }
 
-module.exports = { amapAround, amapRegeo };
+/**
+ * 按城市拉取景点清单（批量生产线选题来源）：
+ * 高德 POI 文本搜索，风景名胜大类（types=110000，实现时以高德 POI 分类文档为准）。
+ * 返回按名称去重的清单；无 key / 失败返回 []。
+ */
+async function amapCityAttractions(city) {
+  if (!config.amap.webKey) return [];
+  const seen = new Set();
+  const names = [];
+  try {
+    // 翻两页凑够候选（每页 offset 20，POI 接口上限 25）
+    for (const page of [1, 2]) {
+      const data = await amapGet(
+        `/place/text?keywords=${encodeURIComponent("景区")}&city=${encodeURIComponent(city)}` +
+          `&types=110000&offset=20&page=${page}&extensions=base`
+      );
+      if (!data || data.status !== "1" || !Array.isArray(data.pois)) break;
+      for (const p of data.pois) {
+        const name = String(p.name || "").trim();
+        if (name && !seen.has(name)) {
+          seen.add(name);
+          names.push(name);
+        }
+      }
+      if (names.length >= 40) break;
+    }
+    return names;
+  } catch (_) {
+    return names;
+  }
+}
+
+module.exports = { amapAround, amapRegeo, amapCityAttractions };

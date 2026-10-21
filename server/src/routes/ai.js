@@ -21,22 +21,15 @@ const {
   MODE_KEYS, DEFAULT_MODE, isValidMode, voiceForMode, ttsOptionsForMode,
 } = require("../lib/modes");
 const {
-  callDeepseek, transferModes, STORY_SYSTEM_PROMPT, normalizeStory,
+  callDeepseek, transferModes, STORY_SYSTEM_PROMPT, storyUserPrompt, normalizeStory,
 } = require("../lib/ai-generate");
+const { saveStory } = require("../lib/story-save");
+const { bochaWebSearch } = require("../lib/websearch");
+const { factCheckStory } = require("../lib/fact-check");
+const { amapCityAttractions } = require("../lib/amap");
 
 const router = express.Router();
 router.use(adminRequired);
-
-// 类别名 → topics 表 id（App 卡片徽章与搜索依赖 story_topics 关联）
-const TOPIC_IDS = { 传说: 1, 历史: 2, 人文: 3, 地质: 4 };
-
-// 城市 → 经纬度：新故事自动建点位，App 地图 pin 落在真实城市
-const CITY_COORDS = {
-  北京: [39.9042, 116.4074], 上海: [31.2304, 121.4737],
-  杭州: [30.2741, 120.1551], 苏州: [31.2989, 120.5853],
-  成都: [30.5728, 104.0668], 西安: [34.3416, 108.9398],
-  南京: [32.0603, 118.7969], 厦门: [24.4798, 118.0894],
-};
 
 /** ai_tasks 留痕 */
 async function logTask(type, input, result, status) {
@@ -96,89 +89,11 @@ router.post("/stories", async (req, res) => {
     variantScripts.set(v.mode, script);
   }
 
-  const conn = await pool.getConnection();
-  let storyId = 0;
-  let slug = s.slug;
   try {
-    await conn.beginTransaction();
-
-    // slug 查重：重名追加 -2、-3…
-    const [existRows] = await conn.query("SELECT id FROM stories WHERE slug = ?", [slug]);
-    if (existRows.length) {
-      let n = 2;
-      for (;;) {
-        const cand = `${slug}-${n}`;
-        const [rows] = await conn.query("SELECT id FROM stories WHERE slug = ?", [cand]);
-        if (!rows.length) { slug = cand; break; }
-        n += 1;
-      }
-    }
-
-    const status = publish ? 2 : 0;
-    const [r] = await conn.query(
-      `INSERT INTO stories
-         (slug, title, hook, emotion_tags, script, duration_sec, source_note, city, status, play_count, published_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ${publish ? "NOW()" : "NULL"})`,
-      [slug, s.title, s.hook, JSON.stringify(s.emotionTags), s.script, s.durationSec, s.sourceNote, s.city, status]
-    );
-    storyId = Number(r.insertId);
-
-    // 讲述模式变体：chat = 主脚本，其余来自请求
-    let variantCount = 0;
-    for (const mode of MODE_KEYS) {
-      const script = mode === DEFAULT_MODE ? s.script : variantScripts.get(mode);
-      if (!script) continue;
-      await conn.query(
-        `INSERT INTO story_variants (story_id, mode, script, voice, duration_sec)
-         VALUES (?, ?, ?, ?, ?)`,
-        [storyId, mode, script, voiceForMode(mode), s.durationSec]
-      );
-      variantCount += 1;
-    }
-
-    // 类型标签落库：category → story_topics（App 卡片徽章/搜索依赖该关联，缺失会导致前端报错）
-    const topicId = TOPIC_IDS[s.category] || TOPIC_IDS["人文"];
-    await conn.query("INSERT INTO story_topics (story_id, topic_id) VALUES (?, ?)", [
-      storyId,
-      topicId,
-    ]);
-
-    await conn.commit();
-    res.json({ storyId, slug, status, variantCount });
+    const { storyId, slug, variantCount } = await saveStory(s, { publish: !!publish, variantScripts });
+    res.json({ storyId, slug, status: publish ? 2 : 0, variantCount });
   } catch (e) {
-    await conn.rollback();
     res.status(500).json({ error: "保存失败：" + e.message });
-    return;
-  } finally {
-    conn.release();
-  }
-
-  // 事务外的事后处理（失败不阻断已保存的故事）：
-  // 自动生成封面（本地 SVG 插画风）
-  try {
-    const coverUrl = makeCover({
-      id: storyId, slug, title: s.title, city: s.city, category: s.category, hook: s.hook,
-    });
-    await pool.query("UPDATE stories SET cover_url = ? WHERE id = ?", [coverUrl, storyId]);
-  } catch (e) {
-    console.warn("封面生成失败（不影响上架）:", e.message);
-  }
-
-  // 城市能对上坐标 → 自动建点位（App 地图 pin 与距离正常显示）
-  const coords = CITY_COORDS[s.city];
-  if (coords) {
-    try {
-      const [pr] = await pool.query(
-        "INSERT INTO points (name, city, lat, lng, radius_m, address) VALUES (?, ?, ?, ?, 200, '')",
-        [s.title.slice(0, 64), s.city, coords[0], coords[1]]
-      );
-      await pool.query("INSERT INTO story_points (story_id, point_id, sort) VALUES (?, ?, 0)", [
-        storyId,
-        Number(pr.insertId),
-      ]);
-    } catch (e) {
-      console.warn("点位创建失败（不影响上架）:", e.message);
-    }
   }
 });
 
@@ -345,6 +260,220 @@ router.get("/list", async (req, res) => {
       LIMIT 20`
   );
   res.json({ stories: rows });
+});
+
+/* ================================================================
+   批量故事生产线（自动上架 · 真实准确优先）
+   设计文档：docs/superpowers/specs/2026-10-21-batch-story-pipeline-design.md
+   ================================================================ */
+
+const batchJobs = new Map(); // jobId → { topics, done, failed, total, results, startedAt }
+const BATCH_TTL = 30 * 60 * 1000;
+const BATCH_CONCURRENCY = 2;
+const BATCH_MAX = 20;
+
+function sweepBatchJobs() {
+  const now = Date.now();
+  for (const [id, j] of batchJobs) if (now - j.startedAt > BATCH_TTL) batchJobs.delete(id);
+}
+
+/** 按需生成留痕统计：用户搜过/拍过的景点频次 Top N */
+async function onDemandTopics(limit) {
+  const [rows] = await pool.query(
+    "SELECT input_material FROM ai_tasks WHERE type='on-demand' AND status='done' ORDER BY id DESC LIMIT 500"
+  );
+  const count = new Map();
+  for (const r of rows) {
+    let m = r.input_material;
+    if (typeof m === "string") {
+      try { m = JSON.parse(m); } catch (_) { m = null; }
+    }
+    const spot = m && m.spot;
+    const name = spot && String(spot.name || "").trim();
+    if (!name) continue;
+    const key = `${spot.city || ""}|${name}`;
+    const prev = count.get(key);
+    count.set(key, { name, city: String(spot.city || ""), n: (prev ? prev.n : 0) + 1 });
+  }
+  return [...count.values()]
+    .sort((a, b) => b.n - a.n)
+    .slice(0, limit)
+    .map(({ name, city, n }) => ({ name, city, n }));
+}
+
+/** 排除库内已有（同名同城，含草稿） */
+async function filterExisting(topics) {
+  let existing = new Set();
+  try {
+    const [rows] = await pool.query("SELECT title, city FROM stories");
+    for (const r of rows) existing.add(`${r.city || ""}|${String(r.title || "").trim()}`);
+  } catch (_) {
+    /* 查不到就不过滤，宁可多给候选 */
+  }
+  const seen = new Set();
+  const out = [];
+  for (const t of topics) {
+    const key = `${t.city || ""}|${t.name}`;
+    if (existing.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+  }
+  return out;
+}
+
+/** 单篇批量生产：素材 → 约束写稿 → 核查 → 变体 → 落库上架 → 配音 */
+async function generateOne(topic) {
+  try {
+    // ① 搜素材：真实准确优先——搜不到宁可不生成
+    const searched = await bochaWebSearch(`${topic.name} ${topic.city}`.trim());
+    const material = searched ? searched.material : "";
+    if (!material) {
+      await logTask("batch", topic, { error: "未搜到可靠素材，按真实准确优先原则跳过" }, "failed");
+      return { name: topic.name, ok: false, error: "未搜到可靠素材（BOCHA_API_KEY 未配置或搜索结果为空）" };
+    }
+    // ② 信源约束写稿 ③ AI 事实核查 pass
+    const parsed = await callDeepseek([
+      { role: "system", content: STORY_SYSTEM_PROMPT },
+      { role: "user", content: storyUserPrompt(topic) },
+    ]);
+    const story = normalizeStory(parsed, topic.name);
+    if (!story) throw new Error("生成的正文过短或缺少标题");
+    const checked = await factCheckStory(material, story.script);
+    story.script = checked.script;
+    story.durationSec = Math.max(60, Math.round(checked.script.length / 4.5));
+    // ④ 风格转换 3 变体 ⑤ 落库上架（封面/点位由 saveStory 自动处理）
+    const results = await transferModes(checked.script, MODE_KEYS.filter((k) => k !== DEFAULT_MODE));
+    const variantScripts = new Map();
+    for (const r of results) if (r.script) variantScripts.set(r.mode, r.script);
+    const { storyId, slug } = await saveStory(story, { publish: true, variantScripts });
+    // ⑥ 4 模式配音（失败不阻断：App 端浏览器语音合成兜底）
+    await synthBatchAudio(storyId, checked.script, variantScripts);
+    await logTask("batch", topic, { storyId, slug, factIssues: checked.issues }, "done");
+    return { name: topic.name, ok: true, storyId, slug };
+  } catch (e) {
+    await logTask("batch", topic, { error: (e && e.message) || "生成失败" }, "failed").catch(() => {});
+    return { name: topic.name, ok: false, error: (e && e.message) || "生成失败" };
+  }
+}
+
+/** 批量配音：4 模式逐一合成（chat 用主脚本，其余用变体），单模式失败不阻塞 */
+async function synthBatchAudio(storyId, chatScript, variantScripts) {
+  const audioRoot = path.join(__dirname, "..", "..", "audio");
+  for (const mode of MODE_KEYS) {
+    const script = mode === DEFAULT_MODE ? chatScript : variantScripts.get(mode);
+    if (!script) continue;
+    const voice = voiceForMode(mode);
+    const outDir = path.join(audioRoot, `ai-${storyId}-${mode}-${Date.now().toString(36)}`);
+    try {
+      fs.mkdirSync(outDir, { recursive: true });
+      const tts = new MsEdgeTTS();
+      await tts.setMetadata(voice, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+      const { audioFilePath } = await Promise.race([
+        tts.toFile(outDir, script, ttsOptionsForMode(mode)),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("配音超时")), 60000)),
+      ]);
+      if (!audioFilePath) throw new Error("未生成音频文件");
+      const url = "/audio/" + path.relative(audioRoot, audioFilePath).replace(/\\/g, "/");
+      await pool.query("UPDATE story_variants SET audio_url = ?, voice = ? WHERE story_id = ? AND mode = ?", [
+        url, voice, storyId, mode,
+      ]);
+    } catch (e) {
+      console.warn(`批量配音失败（故事 ${storyId} 模式 ${mode}，浏览器语音兜底）:`, e.message);
+    }
+  }
+}
+
+/** 批量任务执行：并发 2 的简单队列 */
+function runBatch(jobId, job) {
+  const queue = [...job.topics];
+  const worker = async () => {
+    while (queue.length) {
+      const topic = queue.shift();
+      const result = await generateOne(topic);
+      job.results.push(result);
+      if (result.ok) job.done += 1;
+      else job.failed += 1;
+    }
+  };
+  Promise.all(Array.from({ length: BATCH_CONCURRENCY }, () => worker().catch(() => {})));
+}
+
+// POST /api/admin/ai/batch-plan —— 选题清单（高德按城市 / 按需搜索留痕）
+router.post("/batch-plan", async (req, res) => {
+  const { source, city, limit } = req.body || {};
+  const lim = Math.min(50, Math.max(1, Number(limit) || 20));
+  let topics = [];
+  if (source === "amap-city") {
+    if (typeof city !== "string" || !city.trim()) {
+      return res.status(400).json({ error: "请填写城市名" });
+    }
+    const names = await amapCityAttractions(city.trim());
+    topics = names.map((n) => ({ name: n, city: city.trim() }));
+    if (!topics.length) {
+      return res.json({ topics: [], hint: "未拉取到景点清单（AMap key 未配置或未开通 Web 服务）" });
+    }
+  } else if (source === "on-demand") {
+    topics = await onDemandTopics(lim);
+    if (!topics.length) {
+      return res.json({ topics: [], hint: "暂无按需生成留痕数据（用户搜过/拍过的景点会出现在这里）" });
+    }
+  } else {
+    return res.status(400).json({ error: "source 须为 amap-city 或 on-demand" });
+  }
+  const filtered = await filterExisting(topics);
+  res.json({ topics: filtered.slice(0, lim), hint: `候选 ${filtered.length} 个（已排除库内已有）` });
+});
+
+// POST /api/admin/ai/batch-generate —— 提交批量任务（自动上架）
+router.post("/batch-generate", async (req, res) => {
+  const { topics } = req.body || {};
+  if (!Array.isArray(topics) || !topics.length) {
+    return res.status(400).json({ error: "请选择至少一个景点" });
+  }
+  if (topics.length > BATCH_MAX) {
+    return res.status(400).json({ error: `每批最多 ${BATCH_MAX} 个景点` });
+  }
+  if (!config.ai.apiKey) {
+    return res.status(503).json({ error: "AI 服务未配置，请先在 server/.env 设置 DEEPSEEK_API_KEY" });
+  }
+  const clean = topics
+    .map((t) => ({
+      name: String((t && t.name) || "").trim().slice(0, 60),
+      city: String((t && t.city) || "").trim().slice(0, 20),
+    }))
+    .filter((t) => t.name);
+  if (!clean.length) return res.status(400).json({ error: "景点名称不能为空" });
+
+  sweepBatchJobs();
+  const jobId = "b" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  batchJobs.set(jobId, {
+    topics: clean, done: 0, failed: 0, total: clean.length, results: [], startedAt: Date.now(),
+  });
+  runBatch(jobId, batchJobs.get(jobId));
+  res.json({ jobId, total: clean.length });
+});
+
+// GET /api/admin/ai/batch/:jobId —— 进度轮询
+router.get("/batch/:jobId", (req, res) => {
+  const job = batchJobs.get(String(req.params.jobId || ""));
+  if (!job) return res.status(404).json({ error: "批量任务不存在或已过期" });
+  res.json({ done: job.done, failed: job.failed, total: job.total, results: job.results });
+});
+
+// POST /api/admin/ai/:id/unpublish —— 一键下架（status → 草稿，App 立即不可见）
+router.post("/:id/unpublish", async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    return res.status(400).json({ error: "故事 ID 不正确" });
+  }
+  const [r] = await pool.query(
+    "UPDATE stories SET status = 0, published_at = NULL WHERE id = ? AND status = 2",
+    [id]
+  );
+  if (!r.affectedRows) {
+    return res.status(404).json({ error: "故事不存在或未上架" });
+  }
+  res.json({ ok: true });
 });
 
 module.exports = router;

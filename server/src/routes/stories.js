@@ -47,6 +47,7 @@ async function loadVariants(story) {
 // （FROM 单独拆开：详情需要在列清单里追加 script 等字段，不能拼在 FROM 之后）
 const BASE_COLUMNS = `
     s.id, s.slug, s.title, s.hook, s.city,
+    (s.source_note LIKE 'AI 生成%') AS aiGenerated,
     s.emotion_tags AS emotionTags,
     s.duration_sec AS durationSec,
     s.play_count AS playCount,

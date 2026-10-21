@@ -239,7 +239,7 @@ CREATE TABLE IF NOT EXISTS offline_packages (
 CREATE TABLE IF NOT EXISTS ai_tasks (
   id             BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '任务ID',
   story_id       BIGINT UNSIGNED NULL COMMENT '故事ID（改写/配音完成后回填）',
-  type           ENUM('extract','rewrite','tts','on-demand') NOT NULL COMMENT '任务类型：结构化提取/故事化改写/语音合成/按需生成',
+  type           ENUM('extract','rewrite','tts','on-demand','batch') NOT NULL COMMENT '任务类型：结构化提取/故事化改写/语音合成/按需生成/批量生产',
   input_material JSON            NULL COMMENT '输入素材（史料原文等）',
   status         ENUM('pending','running','done','failed') NOT NULL DEFAULT 'pending' COMMENT '任务状态',
   result         JSON            NULL COMMENT '结果（改写文本或音频地址）',

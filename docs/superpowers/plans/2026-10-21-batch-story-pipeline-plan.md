@@ -1,7 +1,7 @@
 # 批量故事生产线实施计划
 
 对应设计文档：`docs/superpowers/specs/2026-10-21-batch-story-pipeline-design.md`
-状态：待实施
+状态：Phase 1-5 已完成（后端接口 + 管理面板 + AI 角标 + 降级矩阵与浏览器验证）；Phase 0（博查/高德 key 申请）与 Phase 6（真实批量端到端）待需求方办理后进行
 
 ## Phase 0 · 前置（沿用按需生成的待办）
 

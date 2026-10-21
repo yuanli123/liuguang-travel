@@ -456,6 +456,8 @@ function mapRemoteStory(r, local) {
   return {
     id: r.slug,
     title: r.title,
+    // AI 生成标注：卡片显示「AI 生成·未核查」角标（spec 2026-10-21 §7.2）
+    aiGenerated: !!(r.aiGenerated || (local && String(local.source || "").startsWith("AI 生成"))),
     // AI 故事可能没有点位/主题关联（category 为空），兜底避免渲染 "null" 与搜索报错
     spot: r.spot || r.city || "",
     city: r.city,
@@ -1017,6 +1019,7 @@ function selectMapStory(id) {
   }
 
   $("mapCardMood").textContent = s.mood;
+  $("mapCardAiBadge").classList.toggle("hidden", !s.aiGenerated);
   $("mapCardHook").textContent = s.hook;
 
   // 断点续播标签
@@ -1146,6 +1149,7 @@ function renderFeed() {
             <span>🕐 ${s.durationMin} 分钟</span>
             <span>▶ ${s.plays} 次播放</span>
             <span class="mood-tag" style="display:inline-block;padding:2px 8px;border-radius:999px;background:linear-gradient(135deg,rgba(139,92,246,.12),rgba(255,107,138,.12));font-size:11px;color:var(--violet);">${s.mood}</span>
+            ${s.aiGenerated ? '<span class="ai-badge">AI 生成·未核查</span>' : ""}
           </div>
         </div>
         <button type="button" class="btn-feed-save ${saved ? "saved" : ""}" data-save="${s.id}" aria-label="收藏">🔖</button>

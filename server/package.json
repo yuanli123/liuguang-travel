@@ -11,6 +11,7 @@
     "db:init": "node db/init.js",
     "db:migrate-variants": "node db/migrate-variants.js",
     "db:migrate-on-demand": "node db/migrate-on-demand.js",
+    "db:migrate-batch": "node db/migrate-batch.js",
     "backfill-variants": "node scripts/backfill-variants.js",
     "seed": "node db/seed.js",
     "extract-stories": "node db/extract-stories.js",

@@ -167,6 +167,7 @@
   .ai-item .t { flex: 1; min-width: 0; }
   .ai-item .t b { font-weight: 600; }
   .ai-item .t .meta { font-size: 11px; color: var(--ink-3); margin-top: 2px; }
+  .batch-item { display: flex; gap: 8px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--hairline); font-size: 13px; cursor: pointer; }
   .ai-item button {
     background: transparent; border: 1px solid var(--hairline); color: var(--ink-2);
     border-radius: 8px; padding: 4px 12px; font-size: 12px; cursor: pointer; flex-shrink: 0;
@@ -254,6 +255,25 @@
     </div>
     <h3 class="sub-h">最近生成</h3>
     <div id="aiList"></div>
+  </div>
+
+  <div class="panel">
+    <h2>批量生产<span class="hint">搜素材 → 约束写稿 → AI 核查 → 4 变体配音 → 自动上架（带「AI 生成·未核查」标注）</span></h2>
+    <div class="ai-row">
+      <select id="batchSource">
+        <option value="on-demand">按需搜索留痕（用户搜过/拍过的景点）</option>
+        <option value="amap-city">高德按城市拉取</option>
+      </select>
+      <input id="batchCity" placeholder="城市（如：北京）" style="display:none">
+      <button id="batchPlanBtn" class="primary">📋 拉取选题清单</button>
+    </div>
+    <div id="batchHint"></div>
+    <div id="batchList"></div>
+    <div class="ai-row" id="batchSubmitRow" hidden>
+      <button id="batchStart" class="ok-btn">🚀 批量生成并上架（<span id="batchCount">0</span> 篇）</button>
+      <span id="batchMsg"></span>
+    </div>
+    <div id="batchResults"></div>
   </div>
 
   <div class="panel">
@@ -721,7 +741,8 @@
               ? `<button data-id="${s.id}" data-vc="${s.variantCount}" class="ai-tts-quick">🔊 配音</button>`
               : ""
             : s.audioUrl ? "" : `<button data-id="${s.id}" data-vc="0" class="ai-tts-quick">🔊 配音</button>`) +
-          (s.coverUrl ? "" : `<button data-id="${s.id}" class="ai-cover-quick">🎨 封面</button>`);
+          (s.coverUrl ? "" : `<button data-id="${s.id}" class="ai-cover-quick">🎨 封面</button>`) +
+          (s.status === 2 ? `<button data-id="${s.id}" data-title="${escapeHtml(s.title)}" class="ai-unpub">⬇ 下架</button>` : "");
         return `<div class="ai-item">
           <div class="t">
             <b>${escapeHtml(s.title)}</b> · ${escapeHtml(s.city)} · ${escapeHtml(s.slug)}
@@ -779,6 +800,138 @@
         }
       });
     });
+    // 一键下架：App 立即不可见（status → 草稿，可在工坊重新上架）
+    $("aiList").querySelectorAll(".ai-unpub").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        if (!confirm(`确认下架《${btn.dataset.title || "该故事"}》？下架后用户立即不可见。`)) return;
+        btn.disabled = true;
+        btn.textContent = "下架中…";
+        try {
+          await apiPost(`/api/admin/ai/${Number(btn.dataset.id)}/unpublish`, {});
+          toast("已下架");
+          loadAiList().catch(() => {});
+        } catch (e) {
+          toast("下架失败：" + e.message);
+          btn.disabled = false;
+          btn.textContent = "⬇ 下架";
+        }
+      });
+    });
+  }
+
+  /* ---------- 批量生产 ---------- */
+  let batchTopics = [];   // 当前选题清单
+  let batchTimer = null;
+
+  $("batchSource").addEventListener("change", () => {
+    $("batchCity").style.display = $("batchSource").value === "amap-city" ? "" : "none";
+  });
+
+  async function loadBatchPlan() {
+    const source = $("batchSource").value;
+    const body = source === "amap-city" ? { source, city: $("batchCity").value.trim() } : { source, limit: 30 };
+    $("batchPlanBtn").disabled = true;
+    $("batchPlanBtn").textContent = "拉取中…";
+    try {
+      const d = await apiPost("/api/admin/ai/batch-plan", body);
+      batchTopics = d.topics || [];
+      $("batchHint").textContent = d.hint || "";
+      renderBatchList();
+    } catch (e) {
+      $("batchHint").textContent = "拉取失败：" + e.message;
+    } finally {
+      $("batchPlanBtn").disabled = false;
+      $("batchPlanBtn").textContent = "📋 拉取选题清单";
+    }
+  }
+  $("batchPlanBtn").addEventListener("click", loadBatchPlan);
+
+  function renderBatchList() {
+    const host = $("batchList");
+    host.innerHTML = "";
+    if (!batchTopics.length) {
+      host.innerHTML = `<div class="empty">清单为空</div>`;
+      $("batchSubmitRow").hidden = true;
+      return;
+    }
+    batchTopics.forEach((t, i) => {
+      const label = document.createElement("label");
+      label.className = "batch-item";
+      label.innerHTML = `<input type="checkbox" data-i="${i}" checked> ${escapeHtml(t.name)}${
+        t.city ? ` <span class="badge p0">${escapeHtml(t.city)}</span>` : ""
+      }${t.n ? ` <span class="badge p0">搜过 ${t.n} 次</span>` : ""}`;
+      host.appendChild(label);
+    });
+    $("batchSubmitRow").hidden = false;
+    host.querySelectorAll("input").forEach((cb) =>
+      cb.addEventListener("change", () => {
+        $("batchCount").textContent = host.querySelectorAll("input:checked").length;
+      })
+    );
+    $("batchCount").textContent = host.querySelectorAll("input:checked").length;
+  }
+
+  $("batchStart").addEventListener("click", async () => {
+    const picked = [...$("batchList").querySelectorAll("input:checked")]
+      .map((cb) => batchTopics[Number(cb.dataset.i)])
+      .filter(Boolean);
+    if (!picked.length) return toast("请勾选至少一个景点");
+    $("batchStart").disabled = true;
+    $("batchMsg").textContent = "任务已提交，页面每 2 秒刷新进度…";
+    try {
+      const d = await apiPost("/api/admin/ai/batch-generate", { topics: picked });
+      pollBatch(d.jobId);
+    } catch (e) {
+      $("batchMsg").textContent = "提交失败：" + e.message;
+      $("batchStart").disabled = false;
+    }
+  });
+
+  function pollBatch(jobId) {
+    clearInterval(batchTimer);
+    batchTimer = setInterval(async () => {
+      try {
+        const d = await api("/api/admin/ai/batch/" + jobId);
+        const rows = (d.results || []).map((r) =>
+          `<div class="ai-item"><div class="t"><b>${escapeHtml(r.name)}</b>${
+            r.ok
+              ? ` <span class="badge p1">已上架 #${r.storyId}</span>`
+              : ` <span class="badge p0">失败：${escapeHtml(r.error || "未知")}</span>`
+          }</div>${
+            r.ok ? "" : `<button data-name="${escapeHtml(r.name)}" class="batch-retry">🔁 重试</button>`
+          }</div>`
+        ).join("");
+        $("batchResults").innerHTML = rows;
+        $("batchMsg").textContent = `进度：成功 ${d.done} / 失败 ${d.failed} / 共 ${d.total}`;
+        $("batchResults").querySelectorAll(".batch-retry").forEach((btn) => {
+          btn.addEventListener("click", async () => {
+            btn.disabled = true;
+            btn.textContent = "重试中…";
+            try {
+              const r = await apiPost("/api/admin/ai/batch-generate", {
+                topics: [{ name: btn.dataset.name, city: "" }],
+              });
+              pollBatch(r.jobId);
+            } catch (e) {
+              toast("重试失败：" + e.message);
+              btn.disabled = false;
+              btn.textContent = "🔁 重试";
+            }
+          });
+        });
+        if (d.done + d.failed >= d.total) {
+          clearInterval(batchTimer);
+          batchTimer = null;
+          $("batchStart").disabled = false;
+          loadAiList().catch(() => {});
+        }
+      } catch (e) {
+        clearInterval(batchTimer);
+        batchTimer = null;
+        $("batchMsg").textContent = "进度查询失败：" + e.message;
+        $("batchStart").disabled = false;
+      }
+    }, 2000);
   }
 
   /* ---------- 启动 ---------- */

@@ -1707,3 +1707,16 @@ input {
   border-radius: 999px;
   font-size: 13px;
 }
+
+/* AI 生成故事角标（批量生产线自动上架的故事） */
+.ai-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 158, 74, 0.14);
+  border: 1px solid rgba(255, 158, 74, 0.4);
+  color: #c26a1f;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}

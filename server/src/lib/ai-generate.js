@@ -103,6 +103,24 @@ const STORY_SYSTEM_PROMPT = `你是一位资深的旅行故事编剧，擅长把
 只输出一个 JSON 对象，不要任何其他文字：
 {"slug":"...","title":"...","hook":"...","emotionTags":["..."],"category":"...","city":"...","script":"...","sourceNote":"..."}`;
 
+/**
+ * 写稿用户提示词（信源约束式生成，批量与按需共用）：
+ * 只依据素材创作，素材没有的事实不得出现，不确定处模糊表述——
+ * 这是「真实准确优先」的第一层保障（spec 2026-10-21 §3.1）。
+ */
+function storyUserPrompt({ topic, city, material }) {
+  const topicLine = `主题/景点：${topic}\n城市：${city || "待定"}`;
+  if (!material) {
+    return topicLine + "\n参考素材：无（素材不足，请基于景点常识创作，史实从模糊表述）";
+  }
+  return (
+    `${topicLine}\n参考素材：\n${material}\n\n` +
+    "严格约束：只能依据以上素材创作，素材中没有的事实一律不得出现；" +
+    "无法确定的信息用「据说」「相传」「有一种说法」等模糊表述；" +
+    "不写素材未给出的具体年份、数字、人名；不评价、不拔高。"
+  );
+}
+
 /** 归一化并校验故事对象（AI 返回与前端提交共用同一口径） */
 function normalizeStory(s, fallbackTopic) {
   if (!s || typeof s !== "object") return null;
@@ -148,5 +166,6 @@ module.exports = {
   STORY_CATEGORIES,
   STORY_TAG_POOL,
   STORY_SYSTEM_PROMPT,
+  storyUserPrompt,
   normalizeStory,
 };
